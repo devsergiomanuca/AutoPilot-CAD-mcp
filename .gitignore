@@ -7,3 +7,12 @@ artifacts/
 *.suo
 *.bak-acadbridge
 dist/
+
+# Desenhos e arquivos do AutoCAD nunca vão para o repositório (podem conter dados de clientes)
+DWGs/
+*.dwg
+*.dxf
+*.dwl
+*.dwl2
+*.bak
+*.sv$
