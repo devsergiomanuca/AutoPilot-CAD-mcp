@@ -5,11 +5,16 @@
 .DESCRIPTION
   Feito para ser rodado por um agente de IA (Codex, Claude Code...) seguindo docs/INSTALACAO.md,
   mas funciona igual na mão. Na instalação:
-    1. confere Windows x64, AutoCAD 2025 completo (registro), AutoCAD fechado, .NET SDK >= 8;
-    2. publica o servidor MCP em %LOCALAPPDATA%\AcadBridge\mcp\<versão>\;
-    3. compila e instala o plugin como bundle (bundle\install-bundle.ps1);
-    4. testa o MCP (initialize + tools/list);
-    5. registra o MCP "acad-bridge" no agente escolhido (-Agent).
+    1. confere Windows x64, AutoCAD 2025 completo (registro) e AutoCAD fechado;
+    2. escolhe a origem (-Source):
+         build   = compila este código (precisa do .NET SDK >= 8);
+         release = baixa o pacote pronto da Release do GitHub (só precisa do runtime .NET 8,
+                   que o AutoCAD 2025 já instala);
+         auto    = build se houver SDK, senão release (padrão);
+    3. instala o servidor MCP em %LOCALAPPDATA%\AcadBridge\mcp\<versão>\;
+    4. instala o plugin como bundle em %APPDATA%\Autodesk\ApplicationPlugins\AcadBridge.bundle\;
+    5. testa o MCP (initialize + tools/list);
+    6. registra o MCP "acad-bridge" no agente escolhido (-Agent).
   Cada execução termina com linhas "ACADBRIDGE_RESULT chave=valor", fáceis de o agente ler.
 
   Códigos de saída: 0 = ok | 1 = erro | 2 = AutoCAD aberto | 3 = falta pré-requisito.
@@ -17,9 +22,14 @@
 .PARAMETER Agent
   codex | claude | none. Onde registrar o MCP. none = só mostra a configuração para copiar.
 
+.PARAMETER ReleaseZip
+  Origem do pacote na instalação por release: URL (padrão: última Release do GitHub) ou caminho
+  de um AcadBridge.zip local (gerado por scripts\build-release.ps1).
+
 .EXAMPLE
   powershell -NoProfile -ExecutionPolicy Bypass -File setup.ps1 -CheckOnly
   powershell -NoProfile -ExecutionPolicy Bypass -File setup.ps1 -Agent codex
+  powershell -NoProfile -ExecutionPolicy Bypass -File setup.ps1 -Agent codex -Source release
   powershell -NoProfile -ExecutionPolicy Bypass -File setup.ps1 -Verify
   powershell -NoProfile -ExecutionPolicy Bypass -File setup.ps1 -Uninstall
 #>
@@ -27,10 +37,13 @@
 param(
     [ValidateSet('codex', 'claude', 'none')]
     [string]$Agent = 'none',
+    [ValidateSet('auto', 'build', 'release')]
+    [string]$Source = 'auto',
+    [string]$ReleaseZip = 'https://github.com/devsergiomanuca/AutoPilot-CAD-mcp/releases/latest/download/AcadBridge.zip',
     [switch]$CheckOnly,
     [switch]$Verify,
     [switch]$Uninstall,
-    # Para testes: onde fica o MCP publicado e a pasta de plugins do AutoCAD.
+    # Para testes: onde fica o MCP instalado e a pasta de plugins do AutoCAD.
     [string]$InstallDir = (Join-Path $env:LOCALAPPDATA 'AcadBridge'),
     [string]$BundleTarget = (Join-Path $env:APPDATA 'Autodesk\ApplicationPlugins')
 )
@@ -44,6 +57,7 @@ $BundleScript = Join-Path $Root 'bundle\install-bundle.ps1'
 $ServerName = 'acad-bridge'
 $McpRoot = Join-Path $InstallDir 'mcp'
 $ExeName = 'AcadBridge.Mcp.exe'
+$BundleName = 'AcadBridge.bundle'
 $IsRealBundleTarget = $BundleTarget -like '*\Autodesk\ApplicationPlugins'
 
 # ---------------------------------------------------------------------------------------------
@@ -85,19 +99,30 @@ function Find-AcadDir {
     return $null
 }
 
-# Qualquer SDK >= 8 compila net8.0 (o SDK 10 também). Procura no PATH e no local padrão:
-# logo depois de um "winget install" o PATH deste processo ainda não foi atualizado.
-function Find-Dotnet {
+# dotnet.exe no PATH ou no local padrão (logo depois de um "winget install" o PATH deste processo
+# ainda não foi atualizado).
+function Get-DotnetHosts {
     $candidates = @()
     $cmd = Get-Command dotnet -ErrorAction SilentlyContinue
     if ($cmd) { $candidates += $cmd.Source }
     $candidates += (Join-Path $env:ProgramFiles 'dotnet\dotnet.exe')
-    foreach ($d in ($candidates | Select-Object -Unique)) {
-        if (-not (Test-Path $d)) { continue }
+    return @($candidates | Select-Object -Unique | Where-Object { Test-Path $_ })
+}
+
+# SDK >= 8 (compila net8.0; o SDK 10 também serve).
+function Find-DotnetSdk {
+    foreach ($d in Get-DotnetHosts) {
         $sdks = Invoke-Quiet { & $d --list-sdks 2>$null }
-        foreach ($line in $sdks) {
-            if ("$line" -match '^(\d+)\.' -and [int]$Matches[1] -ge 8) { return $d }
-        }
+        foreach ($line in $sdks) { if ("$line" -match '^(\d+)\.' -and [int]$Matches[1] -ge 8) { return $d } }
+    }
+    return $null
+}
+
+# Runtime .NET 8 (Microsoft.NETCore.App 8.x): é o que o MCP precisa para rodar. O AutoCAD 2025 instala.
+function Find-DotnetRuntime8 {
+    foreach ($d in Get-DotnetHosts) {
+        $rts = Invoke-Quiet { & $d --list-runtimes 2>$null }
+        foreach ($line in $rts) { if ("$line" -match '^Microsoft\.NETCore\.App 8\.') { return $d } }
     }
     return $null
 }
@@ -111,7 +136,7 @@ function Get-ProjectVersion([string]$proj) {
 }
 
 function Get-BundleVersion {
-    $xml = Join-Path $BundleTarget 'AcadBridge.bundle\PackageContents.xml'
+    $xml = Join-Path $BundleTarget "$BundleName\PackageContents.xml"
     if (-not (Test-Path $xml)) { return $null }
     return ([xml](Get-Content -Raw -Encoding UTF8 $xml)).ApplicationPackage.AppVersion
 }
@@ -132,30 +157,37 @@ function Test-InUse([string]$dir) {
     return $false
 }
 
-function Publish-Mcp([string]$dotnet) {
-    $ver = Get-ProjectVersion $McpProject
+function Get-McpDestination([string]$ver) {
     New-Item -ItemType Directory -Force $McpRoot | Out-Null
     $dest = Join-Path $McpRoot $ver
     if (Test-Path $dest) {
         if (Test-InUse $dest) {
             $dest = Join-Path $McpRoot ("$ver-" + (Get-Date -Format 'yyyyMMddHHmmss'))
-            Warn "A versão $ver do MCP está em uso por uma conversa aberta; publicando em $dest."
+            Warn "A versão $ver do MCP está em uso por uma conversa aberta; instalando em $dest."
         }
         else { Remove-Item -Recurse -Force $dest }
     }
-    Say "publicando o servidor MCP $ver em $dest"
+    return $dest
+}
+
+# Apaga versões antigas que nenhuma conversa está usando.
+function Remove-OldMcp([string]$keep) {
+    foreach ($old in Get-ChildItem $McpRoot -Directory) {
+        if ($old.FullName -eq $keep -or (Test-InUse $old.FullName)) { continue }
+        try { Remove-Item -Recurse -Force $old.FullName } catch { }
+    }
+}
+
+function Publish-Mcp([string]$dotnet) {
+    $dest = Get-McpDestination (Get-ProjectVersion $McpProject)
+    Say "compilando o servidor MCP em $dest"
     # --artifacts-path: compila fora da pasta do código (bin\ pode estar travado num PC de desenvolvimento).
     $artifacts = Join-Path ([IO.Path]::GetTempPath()) 'AcadBridge-build'
     & $dotnet publish $McpProject -c Release -o $dest --artifacts-path $artifacts -nologo -v quiet | Out-Host
     if ($LASTEXITCODE -ne 0) { Fail 1 "dotnet publish do MCP falhou (código $LASTEXITCODE)." }
     $exe = Join-Path $dest $ExeName
     if (-not (Test-Path $exe)) { Fail 1 "Publicação terminou sem $exe." }
-
-    # Limpa versões antigas que nenhuma conversa está usando.
-    foreach ($old in Get-ChildItem $McpRoot -Directory) {
-        if ($old.FullName -eq $dest -or (Test-InUse $old.FullName)) { continue }
-        try { Remove-Item -Recurse -Force $old.FullName } catch { }
-    }
+    Remove-OldMcp $dest
     return $exe
 }
 
@@ -198,6 +230,56 @@ function Test-Mcp([string]$exe, [switch]$WithStatus) {
         }
     }
     return $r
+}
+
+# ---------------------------------------------------------------------------------------------
+# instalação pela Release (sem SDK)
+# ---------------------------------------------------------------------------------------------
+
+# Baixa (ou copia) o AcadBridge.zip e extrai numa pasta temporária. Devolve a pasta.
+function Get-ReleasePackage([string]$from) {
+    $work = Join-Path ([IO.Path]::GetTempPath()) 'AcadBridge-release'
+    if (Test-Path $work) { Remove-Item -Recurse -Force $work }
+    New-Item -ItemType Directory -Force $work | Out-Null
+    $zip = Join-Path $work 'AcadBridge.zip'
+    if ($from -match '^https?://') {
+        Say "baixando o pacote pronto: $from"
+        # O Windows PowerShell 5.1 pode não oferecer TLS 1.2 por padrão; o GitHub exige.
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        $old = $ProgressPreference; $ProgressPreference = 'SilentlyContinue'   # a barra de progresso deixa o 5.1 muito lento
+        try { Invoke-WebRequest $from -OutFile $zip -UseBasicParsing }
+        catch { Fail 1 "Não consegui baixar o pacote ($($_.Exception.Message)). Confira a internet ou instale o .NET SDK 8 e use -Source build." }
+        finally { $ProgressPreference = $old }
+    }
+    else {
+        if (-not (Test-Path $from)) { Fail 1 "Pacote não encontrado: $from" }
+        Copy-Item $from $zip
+    }
+    $dir = Join-Path $work 'pkg'
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [IO.Compression.ZipFile]::ExtractToDirectory($zip, $dir)
+    Get-ChildItem $dir -Recurse -File | Unblock-File   # tira a marca "baixado da internet"
+    foreach ($need in @('release.json', "mcp\$ExeName", "plugins\$BundleName\PackageContents.xml")) {
+        if (-not (Test-Path (Join-Path $dir $need))) { Fail 1 "Pacote inválido: falta $need." }
+    }
+    return $dir
+}
+
+function Install-FromRelease([string]$pkg) {
+    $info = Get-Content -Raw -Encoding UTF8 (Join-Path $pkg 'release.json') | ConvertFrom-Json
+    Say "pacote: plugin $($info.plugin_version), MCP $($info.mcp_version) (commit $($info.commit))"
+
+    $dest = Get-McpDestination $info.mcp_version
+    Say "instalando o servidor MCP em $dest"
+    Copy-Item (Join-Path $pkg 'mcp') $dest -Recurse
+    Remove-OldMcp $dest
+
+    Say 'instalando o plugin (bundle do AutoCAD)'
+    New-Item -ItemType Directory -Force $BundleTarget | Out-Null
+    $bundle = Join-Path $BundleTarget $BundleName
+    if (Test-Path $bundle) { Remove-Item -Recurse -Force $bundle }   # do zero: sem arquivo velho sobrando
+    Copy-Item (Join-Path $pkg "plugins\$BundleName") $bundle -Recurse
+    return (Join-Path $dest $ExeName)
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -295,7 +377,8 @@ try {
 
     if ($Uninstall) {
         if ($IsRealBundleTarget -and (Test-AcadRunning)) { Fail 2 'O AutoCAD está aberto. Peça para salvar e fechar o AutoCAD e rode de novo.' }
-        & $BundleScript -Uninstall -Target $BundleTarget | Out-Host
+        $bundle = Join-Path $BundleTarget $BundleName
+        if (Test-Path $bundle) { Remove-Item -Recurse -Force $bundle; Say "removido: $bundle" }
         Unregister-Codex
         if (Get-Command claude -ErrorAction SilentlyContinue) { Invoke-Quiet { & claude mcp remove $ServerName --scope user *> $null } }
         if (Test-Path $McpRoot) {
@@ -324,35 +407,48 @@ try {
     }
 
     $acad = Find-AcadDir
-    $dotnet = Find-Dotnet
+    $sdk = Find-DotnetSdk
+    $runtime = Find-DotnetRuntime8
     $running = Test-AcadRunning
+    $chosen = $Source
+    if ($chosen -eq 'auto') { $chosen = if ($sdk) { 'build' } else { 'release' } }
     Result 'autocad_2025_dir' $acad
-    Result 'dotnet' $dotnet
+    Result 'dotnet_sdk' $sdk
+    Result 'dotnet_runtime_8' $runtime
     Result 'autocad_running' $running
+    Result 'source' $chosen
     Result 'installed_plugin_version' (Get-BundleVersion)
     Result 'installed_mcp' (Find-InstalledMcp)
     if ($CheckOnly) {
-        $ok = $acad -and $dotnet -and -not $running
+        $toolsOk = if ($chosen -eq 'build') { [bool]$sdk } else { [bool]$runtime }
+        $ok = $acad -and $toolsOk -and -not $running
         Result 'status' $(if ($ok) { 'ready' } else { 'not_ready' })
         exit 0
     }
 
     if (-not $acad) { Fail 3 'AutoCAD 2025 (versão completa, não LT) não encontrado neste PC.' }
-    if (-not $dotnet) {
-        Fail 3 ('.NET SDK 8 ou mais novo não encontrado. Instale com: ' +
-                'winget install --id Microsoft.DotNet.SDK.8 -e --accept-source-agreements --accept-package-agreements ' +
-                '(ou baixe em https://dotnet.microsoft.com/download/dotnet/8.0) e rode o setup de novo.')
+    if ($chosen -eq 'build' -and -not $sdk) {
+        Fail 3 ('.NET SDK 8 ou mais novo não encontrado (necessário para -Source build). Use -Source release ou instale: ' +
+                'winget install --id Microsoft.DotNet.SDK.8 -e --accept-source-agreements --accept-package-agreements')
+    }
+    if ($chosen -eq 'release' -and -not $runtime) {
+        Fail 3 ('Runtime .NET 8 não encontrado (o AutoCAD 2025 costuma instalá-lo). Instale: ' +
+                'winget install --id Microsoft.DotNet.DesktopRuntime.8 -e --accept-source-agreements --accept-package-agreements')
     }
     if ($IsRealBundleTarget -and $running) { Fail 2 'O AutoCAD está aberto. Peça para salvar e fechar o AutoCAD e rode de novo.' }
 
-    $exe = Publish-Mcp $dotnet
-
-    Say 'compilando e instalando o plugin (bundle do AutoCAD)'
-    & $BundleScript -AcadDir $acad -Dotnet $dotnet -Target $BundleTarget | Out-Host
-    if ($LASTEXITCODE -ne 0) { Fail 1 "install-bundle.ps1 falhou (código $LASTEXITCODE)." }
+    if ($chosen -eq 'build') {
+        $exe = Publish-Mcp $sdk
+        Say 'compilando e instalando o plugin (bundle do AutoCAD)'
+        & $BundleScript -Dotnet $sdk -Target $BundleTarget | Out-Host
+        if ($LASTEXITCODE -ne 0) { Fail 1 "install-bundle.ps1 falhou (código $LASTEXITCODE)." }
+    }
+    else {
+        $exe = Install-FromRelease (Get-ReleasePackage $ReleaseZip)
+    }
 
     $t = Test-Mcp $exe
-    if ($t.tools -lt 1) { Fail 1 'O servidor MCP publicado não respondeu ao tools/list.' }
+    if ($t.tools -lt 1) { Fail 1 'O servidor MCP instalado não respondeu ao tools/list.' }
     Say "MCP $($t.version) responde: $($t.tools) ferramentas."
 
     $registered = $false
@@ -363,6 +459,7 @@ try {
     if (-not $registered) { Show-ManualConfig $exe }
 
     Result 'status' 'installed'
+    Result 'source' $chosen
     Result 'mcp_exe' $exe
     Result 'mcp_version' $t.version
     Result 'tools' $t.tools

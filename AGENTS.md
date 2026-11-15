@@ -46,10 +46,13 @@ e numa recusa por "aba ativa diferente" pergunte ao usuário.
 **Build e teste**
 ```powershell
 dotnet build AcadBridge.Mcp -c Release
-dotnet build AcadBridge.Plugin -c Release            # pode compilar com o AutoCAD aberto (bundle)
-powershell -ExecutionPolicy Bypass -File setup.ps1 -Agent claude   # instalar exige AutoCAD fechado
+dotnet build AcadBridge.Plugin -c Release            # API do AutoCAD via NuGet; compila com ou sem AutoCAD
+powershell -ExecutionPolicy Bypass -File scripts\build-release.ps1                # dist\AcadBridge.zip
+powershell -ExecutionPolicy Bypass -File setup.ps1 -Agent claude -Source build    # instalar exige AutoCAD fechado
 powershell -ExecutionPolicy Bypass -File setup.ps1 -Verify
 ```
+- Não suba os pacotes `AutoCAD.NET*` para 25.0.2: ele foi republicado mirando net10.0.
+- Release: `<Version>` igual nos dois `.csproj` → tag `vX.Y.Z` → o CI publica o zip.
 - Teste de protocolo sem cliente: linhas JSON-RPC no stdin do `AcadBridge.Mcp.exe` (ver `Test-Mcp` no `setup.ps1`).
 - Teste de undo: escolha um caso em que **um** `U` distingue as hipóteses (ex.: a cor tem que voltar).
 - Versão: só `<Version>` nos `.csproj`. Subir a do plugin faz o AutoCAD pedir "Always Load" de novo.

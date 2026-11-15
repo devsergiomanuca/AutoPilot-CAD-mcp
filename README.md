@@ -30,7 +30,8 @@ Abra o seu agente de IA (Codex, Claude Code…) e cole:
 O agente faz o resto. Durante a instalação ele vai pedir que você:
 
 1. **salve e feche o AutoCAD** (o plugin não pode ser instalado com ele aberto);
-2. **aprove** alguns comandos (baixar o código, compilar e gravar a configuração). Se faltar o .NET SDK, o Windows pode pedir permissão de administrador para instalá-lo;
+2. **aprove** alguns comandos (baixar o AcadBridge e gravar a configuração). Não é preciso instalar
+   mais nada: o pacote pronto usa o .NET 8 que o próprio AutoCAD 2025 já instalou;
 3. **abra o AutoCAD** e, no aviso de segurança sobre `AcadBridge.Plugin.dll`, clique em **Always Load**;
 4. **abra uma conversa nova** no agente. As ferramentas do AutoCAD só aparecem em conversas novas.
 
@@ -49,9 +50,10 @@ Resumo, caso não consiga abrir o roteiro:
 ```powershell
 # 1. código em $HOME\AcadBridge (git clone; sem git, baixe o .zip do branch main e extraia)
 git clone https://github.com/devsergiomanuca/AutoPilot-CAD-mcp.git "$HOME\AcadBridge"
-# 2. pré-requisitos (AutoCAD 2025 completo, .NET SDK >= 8, AutoCAD fechado)
+# 2. pré-requisitos (AutoCAD 2025 completo e fechado; .NET 8: o AutoCAD já traz)
 powershell -NoProfile -ExecutionPolicy Bypass -File "$HOME\AcadBridge\setup.ps1" -CheckOnly
 # 3. instalar e registrar no SEU cliente: -Agent codex | claude | none
+#    (sem .NET SDK, baixa o pacote pronto da Release; com SDK, compila este código)
 powershell -NoProfile -ExecutionPolicy Bypass -File "$HOME\AcadBridge\setup.ps1" -Agent codex
 # 4. depois que o usuário abrir o AutoCAD e clicar "Always Load":
 powershell -NoProfile -ExecutionPolicy Bypass -File "$HOME\AcadBridge\setup.ps1" -Verify   # status=connected
@@ -211,8 +213,8 @@ Autodesk App Store. O AutoCAD lê o `PackageContents.xml` na abertura (`SeriesMi
   AutoCAD LT (sem .NET). Outras versões não foram testadas (o bundle aceita só a série R25.0).
 - Um AutoCAD por vez: se houver vários abertos, vale o aberto mais recentemente.
 - `get_selection` e `move_selection_to_layer` usam a seleção feita **sem comando ativo** (pickfirst).
-- `extents` vem de `EXTMIN/EXTMAX`, que o AutoCAD só atualiza em certos momentos (ex.: `ZOOM E`):
-  num desenho novo os números podem vir absurdos.
+- `extents` é calculado pelas entidades do Model. Acima de 50 mil entidades, usa `EXTMIN/EXTMAX`, que
+  o AutoCAD só atualiza em certos momentos (ex.: `ZOOM E`); a resposta indica a origem (`source`).
 - `list_layers` com contagem abre todas as entidades: pode demorar em desenhos enormes
   (`include_counts: false`).
 
@@ -226,18 +228,27 @@ AcadBridge.Plugin/     plugin (net8.0-windows, x64). BridgeServer.cs = TCP + thr
                        DrawingQueries.cs = leitura; DrawingEdits.cs = escrita; DocumentRegistry.cs = vários desenhos
 bundle/                PackageContents.xml (modelo) + install-bundle.ps1 (compila e monta o .bundle)
 setup.ps1              instalação completa: pré-requisitos, MCP, bundle, registro no agente, verificação
+scripts/build-release.ps1   gera dist/AcadBridge.zip (o pacote pronto das Releases)
+.github/workflows/     CI: compila em Windows limpo; em tag v* publica a Release
 docs/INSTALACAO.md     roteiro que o agente de IA segue
 00-hello/              primeiro plugin de estudo (comando OLAPONTE); não é instalado
 ```
 
 ```powershell
 dotnet build AcadBridge.Mcp -c Release
-dotnet build AcadBridge.Plugin -c Release -p:AcadDir="C:\Program Files\Autodesk\AutoCAD 2025"   # AcadDir é opcional
-powershell -ExecutionPolicy Bypass -File setup.ps1 -Agent claude     # instala e registra (AutoCAD fechado)
+dotnet build AcadBridge.Plugin -c Release
+powershell -ExecutionPolicy Bypass -File scripts\build-release.ps1               # gera dist\AcadBridge.zip
+powershell -ExecutionPolicy Bypass -File setup.ps1 -Agent claude -Source build   # instala e registra (AutoCAD fechado)
 ```
 
-- Requisitos: .NET SDK ≥ 8 e AutoCAD 2025 instalado. As DLLs `acdbmgd/acmgd/accoremgd` vêm da
-  instalação dele (`Private=false`) e nunca vão para o bundle.
+- Requisitos para compilar: só o .NET SDK ≥ 8. A API do AutoCAD vem dos pacotes NuGet oficiais
+  `AutoCAD.NET` 25.0.x, com `ExcludeAssets=runtime`: as DLLs `acdbmgd/acmgd/accoremgd` servem só para
+  compilar e nunca vão para o bundle. Em execução valem as da instalação do AutoCAD. Por isso o CI
+  compila sem AutoCAD.
+- **Publicar uma versão**: ajuste `<Version>` nos dois `.csproj`, depois `git tag vX.Y.Z` e
+  `git push origin vX.Y.Z`. O workflow confere se a tag bate com as versões, gera o zip e cria a
+  Release. O `setup.ps1` baixa sempre a **última** Release
+  (`releases/latest/download/AcadBridge.zip`).
 - Com o bundle, o AutoCAD trava a **cópia instalada**, não `bin\`. Dá para **compilar** com ele aberto;
   só **instalar** exige fechá-lo. Não use `NETLOAD` no AcadBridge (carregaria duas vezes).
 - Versão: `<Version>` de cada `.csproj` é a única fonte. Subir a versão do plugin faz o AutoCAD

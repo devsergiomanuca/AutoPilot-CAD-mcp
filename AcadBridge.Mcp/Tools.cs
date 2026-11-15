@@ -44,7 +44,8 @@ internal static class Tools
 
         Tool("get_drawing_summary",
              "Resumo do desenho ativo: nome/arquivo, unidades, alterações não salvas, layer atual, " +
-             "extensão do desenho, contagem de entidades do Model por tipo, layouts, nº de layers/blocos/estilos. " +
+             "extensão do Model (min/max/size calculados pelas entidades, nas unidades do desenho), contagem de " +
+             "entidades do Model por tipo, layouts, nº de layers/blocos/estilos. " +
              "Use primeiro para se orientar.",
              new JsonObject()),
 

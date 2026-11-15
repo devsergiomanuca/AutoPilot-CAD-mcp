@@ -68,7 +68,7 @@ internal static class DrawingQueries
             if (!btr.IsLayout && !btr.IsAnonymous) userBlocks++;
         }
 
-        bool emptyExtents = db.Extmin.X > db.Extmax.X;
+        object? extents = ModelExtents(db, tr, ms, total);
         return new
         {
             document = doc.Name,
@@ -79,13 +79,59 @@ internal static class DrawingQueries
             measurement = db.Measurement.ToString(),
             current_layer = ((LayerTableRecord)tr.GetObject(db.Clayer, OpenMode.ForRead)).Name,
             current_layout = Convert.ToString(AcApp.GetSystemVariable("CTAB")),
-            extents = emptyExtents ? null : new { min = P(db.Extmin), max = P(db.Extmax) },
+            extents,
             model_space = new { total_entities = total, by_type = byType },
             layouts = layouts.OrderBy(l => l.order).Select(l => l.info).ToList(),
             layer_count = Count(tr, db.LayerTableId),
             block_definitions = userBlocks,
             text_styles = Count(tr, db.TextStyleTableId),
             dimension_styles = Count(tr, db.DimStyleTableId),
+        };
+    }
+
+    /// <summary>Acima disto, abrir todas as entidades fica caro: usa EXTMIN/EXTMAX e avisa.</summary>
+    private const int MaxEntitiesForExtents = 50_000;
+
+    /// <summary>
+    /// Extensão do Model calculada pelas ENTIDADES. EXTMIN/EXTMAX (o que o AutoCAD guarda) só são
+    /// recalculados em certos momentos (ZOOM E, REGEN...) e num desenho novo chegaram a vir em ±10⁷ mm.
+    /// Entidades sem extensão finita (XLINE, RAY, objetos vazios) lançam em GeometricExtents e são puladas.
+    /// </summary>
+    private static object? ModelExtents(Database db, Transaction tr, BlockTableRecord ms, int total)
+    {
+        if (total == 0) return null;
+        if (total > MaxEntitiesForExtents)
+        {
+            if (db.Extmin.X > db.Extmax.X) return null;
+            return new
+            {
+                min = P(db.Extmin), max = P(db.Extmax),
+                source = "EXTMIN/EXTMAX",
+                note = $"Desenho com mais de {MaxEntitiesForExtents} entidades: valores guardados pelo AutoCAD, " +
+                       "que podem estar desatualizados (o usuário pode rodar ZOOM → Extents para atualizar).",
+            };
+        }
+
+        bool any = false;
+        var acc = new Extents3d();
+        int skipped = 0;
+        foreach (ObjectId id in ms)
+        {
+            if (tr.GetObject(id, OpenMode.ForRead) is not Entity ent || !ent.Visible) continue;
+            try
+            {
+                Extents3d e = ent.GeometricExtents;
+                if (any) acc.AddExtents(e); else { acc = e; any = true; }
+            }
+            catch { skipped++; }
+        }
+        if (!any) return null;
+        return new
+        {
+            min = P(acc.MinPoint), max = P(acc.MaxPoint),
+            size = new[] { R(acc.MaxPoint.X - acc.MinPoint.X), R(acc.MaxPoint.Y - acc.MinPoint.Y), R(acc.MaxPoint.Z - acc.MinPoint.Z) },
+            source = "entities",
+            skipped_without_extents = skipped,
         };
     }
 

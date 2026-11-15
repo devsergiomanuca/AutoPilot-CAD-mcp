@@ -61,7 +61,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$HOME\AcadBridge\setup.ps1"
 | Resultado | O que fazer |
 |---|---|
 | `autocad_2025_dir=` (vazio) | **Pare.** Explique que é preciso o **AutoCAD 2025 completo** (o LT não suporta plugins) |
-| `dotnet=` (vazio) | Instale o .NET SDK 8 (o Windows pode pedir confirmação de administrador): `winget install --id Microsoft.DotNet.SDK.8 -e --accept-source-agreements --accept-package-agreements`. Sem winget, peça ao usuário para baixar o "SDK x64" em https://dotnet.microsoft.com/download/dotnet/8.0. Depois repita o passo 2 |
+| `source=release` e `dotnet_runtime_8=` (vazio) | Raro: o AutoCAD 2025 instala o .NET 8. Instale o runtime (o Windows pode pedir confirmação de administrador): `winget install --id Microsoft.DotNet.DesktopRuntime.8 -e --accept-source-agreements --accept-package-agreements`. Depois repita o passo 2 |
+| `source=build` e `dotnet_sdk=` (vazio) | Só acontece com `-Source build` forçado. Use o padrão (`-Source auto`), que instala pelo pacote pronto |
 | `autocad_running=True` | Peça: "**Salve seus desenhos e feche o AutoCAD**, depois me avise." Repita o passo 2 |
 | `status=ready` | Siga em frente |
 
@@ -71,8 +72,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$HOME\AcadBridge\setup.ps1"
 powershell -NoProfile -ExecutionPolicy Bypass -File "$HOME\AcadBridge\setup.ps1" -Agent codex   # ou claude / none
 ```
 
-O script compila o plugin e o servidor MCP, instala o bundle do AutoCAD, testa o MCP
-(`tools=11` esperado) e registra o servidor `acad-bridge` no agente. Espere `status=installed`.
+O script decide a origem (`source=`):
+- **`release`**, o normal: baixa o pacote pronto da última Release do GitHub. Não compila nada e não
+  precisa de SDK.
+- **`build`**: só se o PC tiver .NET SDK ≥ 8; compila este código.
+
+Depois instala o bundle do AutoCAD e o servidor MCP, testa o MCP (`tools=11` esperado) e registra o
+servidor `acad-bridge` no agente. Espere `status=installed`.
 
 - `exit 2`: o AutoCAD foi aberto no meio. Peça para fechar e rode de novo.
 - `exit 1`: leia a linha `XX ...` e a seção **Problemas comuns**.
@@ -142,7 +148,8 @@ Isso remove o bundle, o MCP publicado e o registro no Codex/Claude Code. A pasta
 | ferramenta responde "AutoCAD ocupado com o comando…" | há um comando em andamento | peça para terminar o comando ou apertar **Esc** |
 | ferramenta responde "modo SOMENTE LEITURA" | o usuário ligou `ACADBRIDGE_READONLY` | só libere se ele quiser: digitar `ACADBRIDGE_READONLY` de novo |
 | "plugin mais antigo que este servidor MCP" | atualização incompleta | AutoCAD fechado → passo 3 |
-| `dotnet publish`/`build` falhou | SDK ausente ou corrompido, ou AutoCAD em pasta diferente | repita o passo 2; confira `autocad_2025_dir` |
+| "Não consegui baixar o pacote" | sem internet, proxy/antivírus bloqueando o GitHub, ou ainda não existe Release | confira a conexão. Se o PC tiver .NET SDK, use `-Source build` |
+| `dotnet publish`/`build` falhou (só em `source=build`) | SDK corrompido ou sem acesso ao nuget.org | rode de novo com `-Source release` |
 | as ferramentas não aparecem no agente | conversa aberta antes da instalação, ou registro faltando | conversa nova. Codex: confira `[mcp_servers.acad-bridge]` em `~/.codex/config.toml`. Claude Code: `claude mcp get acad-bridge` |
 | Codex: timeout ao iniciar o MCP | antivírus examinando o .exe novo | tente de novo; o setup já usa `startup_timeout_sec = 20` |
 

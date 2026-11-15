@@ -71,14 +71,24 @@ internal static class Program
         return 0;
     }
 
+    /// <summary>
+    /// Versões do MCP que este servidor atende. Usamos só o básico (tools/list, tools/call com text/image),
+    /// que é igual em todas elas. A primeira é a preferida.
+    /// </summary>
+    private static readonly string[] SupportedProtocolVersions = { "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05" };
+
     private static JsonObject Initialize(JsonNode? p)
     {
-        // Negociação de versão: devolvemos a que o cliente pediu (usamos só recursos básicos).
-        string requested = p?["protocolVersion"]?.GetValue<string>() ?? "2025-06-18";
-        Log($"initialize: cliente={p?["clientInfo"]?["name"]} protocolo={requested}");
+        // Negociação de versão (especificação MCP): se o cliente pediu uma versão que suportamos, devolvemos
+        // a mesma; senão, devolvemos a nossa preferida e o CLIENTE decide se continua.
+        string? requested = p?["protocolVersion"]?.GetValue<string>();
+        string version = requested != null && SupportedProtocolVersions.Contains(requested)
+            ? requested
+            : SupportedProtocolVersions[0];
+        Log($"initialize: cliente={p?["clientInfo"]?["name"]} pediu={requested ?? "(nada)"} respondido={version}");
         return new JsonObject
         {
-            ["protocolVersion"] = requested,
+            ["protocolVersion"] = version,
             ["capabilities"] = new JsonObject { ["tools"] = new JsonObject { ["listChanged"] = false } },
             ["serverInfo"] = new JsonObject { ["name"] = "acad-bridge", ["title"] = "AutoCAD Bridge", ["version"] = Version },
             ["instructions"] =

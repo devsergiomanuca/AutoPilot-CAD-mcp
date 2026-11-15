@@ -4,7 +4,8 @@
   na abertura, sem NETLOAD.
 
 .DESCRIPTION
-  1. Recompila o AcadBridge.Plugin (Release), a menos que -NoBuild.
+  1. Recompila o AcadBridge.Plugin (Release), a menos que -NoBuild. Com -Target fora de
+     ApplicationPlugins, só monta o bundle numa pasta (é o que o scripts\build-release.ps1 usa).
   2. Monta AcadBridge.bundle\ (PackageContents.xml + Contents\*.dll) na pasta de plugins
      do usuário: %APPDATA%\Autodesk\ApplicationPlugins (não precisa de admin).
   3. Recusa rodar com o AutoCAD aberto: a DLL instalada fica travada enquanto ele roda e,
@@ -21,8 +22,6 @@ param(
     [switch]$Uninstall,
     [switch]$NoBuild,
     [string]$Target = (Join-Path $env:APPDATA 'Autodesk\ApplicationPlugins'),
-    # Pasta do AutoCAD 2025 (referências acdbmgd/acmgd/accoremgd). Vazio = padrão do .csproj.
-    [string]$AcadDir = '',
     # Caminho do dotnet.exe (o setup.ps1 passa o caminho completo logo após instalar o SDK).
     [string]$Dotnet = 'dotnet'
 )
@@ -47,9 +46,8 @@ if ($Uninstall) {
 
 if (-not $NoBuild) {
     Write-Host '== compilando AcadBridge.Plugin (Release)'
-    $buildArgs = @('build', $pluginDir, '-c', 'Release', '-nologo', '-v', 'quiet')
-    if ($AcadDir) { $buildArgs += "-p:AcadDir=$($AcadDir.TrimEnd('\'))" }
-    & $Dotnet @buildArgs
+    # As referências da API do AutoCAD vêm do NuGet (AutoCAD.NET 25.0.x): não precisa do AutoCAD instalado.
+    & $Dotnet build $pluginDir -c Release -nologo -v quiet
     if ($LASTEXITCODE -ne 0) { throw "dotnet build falhou (código $LASTEXITCODE)" }
 }
 

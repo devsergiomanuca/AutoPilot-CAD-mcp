@@ -10,15 +10,16 @@
     <EnableDynamicLoading>true</EnableDynamicLoading>
     <AssemblyName>AcadBridge.Plugin</AssemblyName>
     <RootNamespace>AcadBridge.Plugin</RootNamespace>
-    <Version>0.3.1</Version>
-    <!-- Pasta do AutoCAD 2025 (de onde vêm acdbmgd/acmgd/accoremgd). O setup.ps1 detecta pelo
-         registro (AcadLocation) e passa -p:AcadDir=...; sem isso, usa a instalação padrão. -->
-    <AcadDir Condition="'$(AcadDir)' == ''">C:\Program Files\Autodesk\AutoCAD 2025</AcadDir>
+    <Version>0.3.2</Version>
   </PropertyGroup>
   <ItemGroup>
-    <!-- Private=false: usa as DLLs da instalação do AutoCAD, nunca copia para bin. -->
-    <Reference Include="accoremgd"><HintPath>$(AcadDir)\accoremgd.dll</HintPath><Private>false</Private></Reference>
-    <Reference Include="acdbmgd"><HintPath>$(AcadDir)\acdbmgd.dll</HintPath><Private>false</Private></Reference>
-    <Reference Include="acmgd"><HintPath>$(AcadDir)\acmgd.dll</HintPath><Private>false</Private></Reference>
+    <!-- API .NET do AutoCAD 2025 pelos pacotes oficiais da Autodesk (série 25.0 = AutoCAD 2025, net8.0).
+         Compila sem o AutoCAD instalado (CI do GitHub). ExcludeAssets=runtime: as DLLs NÃO vão para
+         bin nem para o bundle; em execução valem as da instalação do AutoCAD.
+         AutoCAD.NET 25.0.1 (não 25.0.0): o 25.0.0 depende de um Core "25.0.0-V058" que não foi publicado.
+         Não suba para 25.0.2: ele foi republicado mirando net10.0. -->
+    <PackageReference Include="AutoCAD.NET" Version="25.0.1" ExcludeAssets="runtime" />
+    <PackageReference Include="AutoCAD.NET.Core" Version="25.0.0" ExcludeAssets="runtime" />
+    <PackageReference Include="AutoCAD.NET.Model" Version="25.0.0" ExcludeAssets="runtime" />
   </ItemGroup>
 </Project>

@@ -1,0 +1,44 @@
+# Compila tudo num Windows limpo (sem AutoCAD: a API vem do NuGet AutoCAD.NET 25.0.x) e gera dist/AcadBridge.zip.
+# Em tag "v*" (ex.: v0.3.2), publica a Release com o zip. O setup.ps1 baixa esse zip quando o PC não tem .NET SDK.
+#
+# Para publicar uma versão:  ajuste <Version> nos dois .csproj  ->  git tag v0.3.2  ->  git push origin v0.3.2
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write   # só usado no passo da Release (tags)
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      # "powershell" = Windows PowerShell 5.1, o mesmo do PC de quem instala.
+      - name: Gerar pacote
+        shell: powershell
+        run: |
+          $expected = ''
+          if ('${{ github.ref_type }}' -eq 'tag') { $expected = '${{ github.ref_name }}' }
+          .\scripts\build-release.ps1 -ExpectedVersion $expected
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AcadBridge
+          path: dist/AcadBridge.zip
+
+      - name: Publicar Release
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" dist/AcadBridge.zip --title "AcadBridge ${{ github.ref_name }}" --generate-notes
