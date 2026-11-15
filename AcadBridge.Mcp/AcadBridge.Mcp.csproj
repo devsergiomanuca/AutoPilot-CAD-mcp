@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Servidor MCP (stdio). Claude Code / Codex iniciam este .exe e conversam por JSON-RPC.
+       net8.0: o AutoCAD 2025 já instala o runtime .NET 8, então roda em qualquer PC com ele. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>AcadBridge.Mcp</AssemblyName>
+    <RootNamespace>AcadBridge.Mcp</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <Version>0.3.1</Version>
+  </PropertyGroup>
+</Project>

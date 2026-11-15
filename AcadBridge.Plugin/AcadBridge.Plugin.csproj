@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Plugin que roda DENTRO do AutoCAD 2025 (instalado como bundle pelo setup.ps1). -->
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PlatformTarget>x64</PlatformTarget>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <AssemblyName>AcadBridge.Plugin</AssemblyName>
+    <RootNamespace>AcadBridge.Plugin</RootNamespace>
+    <Version>0.3.1</Version>
+    <!-- Pasta do AutoCAD 2025 (de onde vêm acdbmgd/acmgd/accoremgd). O setup.ps1 detecta pelo
+         registro (AcadLocation) e passa -p:AcadDir=...; sem isso, usa a instalação padrão. -->
+    <AcadDir Condition="'$(AcadDir)' == ''">C:\Program Files\Autodesk\AutoCAD 2025</AcadDir>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Private=false: usa as DLLs da instalação do AutoCAD, nunca copia para bin. -->
+    <Reference Include="accoremgd"><HintPath>$(AcadDir)\accoremgd.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="acdbmgd"><HintPath>$(AcadDir)\acdbmgd.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="acmgd"><HintPath>$(AcadDir)\acmgd.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+</Project>

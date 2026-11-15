@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Manifesto do bundle AcadBridge (modelo).
+  O install-bundle.ps1 troca {{VERSION}} pela versão do AcadBridge.Plugin.dll compilado
+  e copia tudo para %APPDATA%\Autodesk\ApplicationPlugins\AcadBridge.bundle\.
+
+  Como o AutoCAD usa isto: na inicialização ele varre as pastas ApplicationPlugins,
+  lê cada PackageContents.xml, confere RuntimeRequirements (SO, produto, versão) e
+  carrega os ComponentEntry que casam. LoadOnAutoCADStartup="True" = carrega já na
+  abertura (precisamos disso: o servidor TCP tem que estar no ar antes da IA perguntar).
+
+  ProductCode/UpgradeCode: identificadores fixos deste app. Não mude entre versões
+  (o AutoCAD usa para saber que é "o mesmo app, versão nova").
+-->
+<ApplicationPackage
+    SchemaVersion="1.0"
+    AutodeskProduct="AutoCAD"
+    ProductType="Application"
+    Name="AcadBridge"
+    Description="Ponte local (127.0.0.1) entre agentes de IA via MCP e o AutoCAD: leitura do desenho + edição com undo."
+    AppVersion="{{VERSION}}"
+    FriendlyVersion="{{VERSION}}"
+    SupportedLocales="Enu|Ptb"
+    Author="AcadBridge lab"
+    ProductCode="{DAE4DCED-1239-4276-9605-DB11ED41DEAE}"
+    UpgradeCode="{538228EC-93C6-46FB-96E8-A8E335749DA4}">
+
+  <CompanyDetails Name="AcadBridge lab" />
+
+  <!--
+    R25.0 = AutoCAD 2025 (.NET 8). Só essa série foi testada.
+    "AutoCAD*" = AutoCAD e verticais (Architecture, Mechanical...). O LT fica de fora:
+    ele não roda plugins .NET.
+  -->
+  <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R25.0" SeriesMax="R25.0" />
+
+  <Components Description="AcadBridge para AutoCAD 2025 x64">
+    <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R25.0" SeriesMax="R25.0" />
+    <ComponentEntry
+        AppName="AcadBridge"
+        Version="{{VERSION}}"
+        ModuleName="./Contents/AcadBridge.Plugin.dll"
+        AppDescription="Servidor local que o MCP acad-bridge usa para consultar o desenho."
+        LoadOnAutoCADStartup="True">
+      <Commands GroupName="ACADBRIDGE">
+        <Command Local="ACADBRIDGE" Global="ACADBRIDGE" />
+        <Command Local="ACADBRIDGE_START" Global="ACADBRIDGE_START" />
+        <Command Local="ACADBRIDGE_STOP" Global="ACADBRIDGE_STOP" />
+        <Command Local="ACADBRIDGE_READONLY" Global="ACADBRIDGE_READONLY" />
+      </Commands>
+    </ComponentEntry>
+  </Components>
+</ApplicationPackage>
