@@ -52,7 +52,9 @@ powershell -ExecutionPolicy Bypass -File setup.ps1 -Agent claude -Source build  
 powershell -ExecutionPolicy Bypass -File setup.ps1 -Verify
 ```
 - Não suba os pacotes `AutoCAD.NET*` para 25.0.2: ele foi republicado mirando net10.0.
-- Release: `<Version>` igual nos dois `.csproj` → tag `vX.Y.Z` → o CI publica o zip.
+- Release: `<Version>` igual nos dois `.csproj` → commit e `git push origin main` → **depois, num push
+  separado**, `git tag vX.Y.Z` + `git push origin vX.Y.Z` → o CI publica o zip. (Na v0.3.2, branch e
+  tag no mesmo push não geraram a execução da tag.)
 - Teste de protocolo sem cliente: linhas JSON-RPC no stdin do `AcadBridge.Mcp.exe` (ver `Test-Mcp` no `setup.ps1`).
 - Teste de undo: escolha um caso em que **um** `U` distingue as hipóteses (ex.: a cor tem que voltar).
 - Versão: só `<Version>` nos `.csproj`. Subir a do plugin faz o AutoCAD pedir "Always Load" de novo.

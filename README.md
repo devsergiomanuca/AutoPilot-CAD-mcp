@@ -245,8 +245,8 @@ powershell -ExecutionPolicy Bypass -File setup.ps1 -Agent claude -Source build  
   `AutoCAD.NET` 25.0.x, com `ExcludeAssets=runtime`: as DLLs `acdbmgd/acmgd/accoremgd` servem só para
   compilar e nunca vão para o bundle. Em execução valem as da instalação do AutoCAD. Por isso o CI
   compila sem AutoCAD.
-- **Publicar uma versão**: ajuste `<Version>` nos dois `.csproj`, depois `git tag vX.Y.Z` e
-  `git push origin vX.Y.Z`. O workflow confere se a tag bate com as versões, gera o zip e cria a
+- **Publicar uma versão**: ajuste `<Version>` nos dois `.csproj`, envie o commit e, **num push
+  separado**, `git tag vX.Y.Z` e `git push origin vX.Y.Z`. O workflow confere se a tag bate com as versões, gera o zip e cria a
   Release. O `setup.ps1` baixa sempre a **última** Release
   (`releases/latest/download/AcadBridge.zip`).
 - Com o bundle, o AutoCAD trava a **cópia instalada**, não `bin\`. Dá para **compilar** com ele aberto;
