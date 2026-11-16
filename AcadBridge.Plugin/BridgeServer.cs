@@ -201,6 +201,11 @@ internal sealed class BridgeServer : IDisposable
 
         if (DrawingEdits.Methods.Contains(method))
         {
+            // Variante só de leitura (ex.: generate_elevation com dry_run): sem undo e liberada no modo somente leitura.
+            using (doc.LockDocument())
+            {
+                if (DrawingEdits.ReadOnlyVariant(doc, method, p) is { } preview) return new Executed(preview, where);
+            }
             DrawingEdits.EnsureWritable();
             using (doc.LockDocument())   // lock SEM nome: só leitura aqui, não abre grupo de undo
             {
@@ -224,6 +229,7 @@ internal sealed class BridgeServer : IDisposable
             "capture_view" => DrawingQueries.Capture(doc,
                                   (uint)Math.Clamp(GetInt(p, "width", 1280), 256, 2048),
                                   (uint)Math.Clamp(GetInt(p, "height", 800), 256, 2048)),
+            "read_geometry" => GeometryReader.Read(doc, p),
             _ => throw new InvalidOperationException($"Método desconhecido: '{method}'."),
         };
         return new Executed(result, where);

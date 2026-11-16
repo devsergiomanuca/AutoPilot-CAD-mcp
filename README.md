@@ -75,9 +75,24 @@ Com o AutoCAD aberto, peça em linguagem natural:
 - "Cria a layer CORTE, vermelha, tracejada, 0,35." · "Move o que eu selecionei para a layer COTAS."
 - "Confere se as layers seguem o padrão do escritório e me diz o que está fora."
 
+### Vista de uma parede (elevação) a partir da planta
+
+1. Desenhe uma **linha sobre a face da parede**, da **esquerda para a direita** de quem olha a parede
+   **de dentro do ambiente**. Use OSNAP nos cantos. Deixe a linha **selecionada**.
+2. Peça: *"Gera a vista dessa parede"*.
+3. A IA mostra antes o que encontrou: comprimento, pé-direito (lido do rótulo "P.D." do ambiente),
+   portas, janelas e vãos com larguras e alturas. Corrija o que precisar ("a abertura 2 é janela com
+   peitoril 0,90").
+4. Ela desenha contorno, aberturas, cotas e título **ao lado da planta**, em layers `IA-VISTA*`.
+   Depois você pode pedir os acabamentos ("pinta até 1,10 m de verde-musgo, o resto branco gelo").
+
+Paredes, portas e janelas são reconhecidas **pela geometria**, então funciona mesmo com paredes na
+layer 0, portas em blocos com nomes genéricos ou a planta dentro de um XREF. A unidade (m, cm, mm) é
+deduzida pelas medidas, mesmo que o arquivo declare outra.
+
 | Comando no AutoCAD | O que faz |
 |---|---|
-| `U` | desfaz a última ação da IA, inteira, como qualquer comando |
+| `U` | desfaz a última ação da IA, inteira, como qualquer comando. **Atenção:** zoom e pan também entram no histórico. Se você navegou depois da ação, os primeiros `U` desfazem a navegação. Confira na linha de comando se apareceu `ACADBRIDGE_…` |
 | `ACADBRIDGE` | mostra o status (versão, porta, modo, último erro) |
 | `ACADBRIDGE_READONLY` | liga/desliga o **modo somente leitura**: a IA continua vendo, mas não altera nada |
 | `ACADBRIDGE_STOP` / `ACADBRIDGE_START` | desliga/religa o acesso da IA a este AutoCAD |
@@ -122,7 +137,7 @@ Implementação **à mão, sem SDK**, sobre o transporte stdio:
 | `initialize` | ecoa a `protocolVersion` pedida; `capabilities.tools`; `serverInfo`; `instructions`: regras de uso para o modelo (consultar antes de alterar, avisar o que mudou, 1 chamada = 1 undo, o que fazer numa recusa) |
 | `notifications/initialized` | notificação, sem resposta |
 | `ping` | `{}` |
-| `tools/list` | 11 ferramentas com `inputSchema` (JSON Schema, `additionalProperties: false`) e `annotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) |
+| `tools/list` | 14 ferramentas com `inputSchema` (JSON Schema, `additionalProperties: false`) e `annotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) |
 | `tools/call` | `content` com `text` (JSON indentado) ou `image` (PNG base64) |
 
 Regras do protocolo seguidas no código:
@@ -192,6 +207,9 @@ Autodesk App Store. O AutoCAD lê o `PackageContents.xml` na abertura (`SeriesMi
 | `create_layer` | **altera** (acrescenta) | cor (ACI, RGB ou nome), tipo de linha (carrega de `acadiso.lin`), espessura, plotável, descrição, tornar atual |
 | `update_layer` | **altera** | só o que for informado; devolve **de → para**; pedido sem mudança não grava undo |
 | `move_selection_to_layer` | **altera** | move a seleção; pula layers travadas e avisa |
+| `read_geometry` | leitura | geometria em coordenadas reais, **entrando em blocos e XREFs**: linhas, polilinhas, arcos, textos, cotas, hachuras; filtros por região, seleção, layers e tipos; palpite de unidade |
+| `draw_entities` | **altera** (acrescenta) | lote de linha, polilinha, retângulo, círculo, arco, texto, mtexto, cota, hachura e bloco (com atributos) num único undo; valida tudo antes |
+| `generate_elevation` | **altera** (acrescenta); `dry_run` só lê | vista de uma parede a partir da planta: vãos pela geometria (arco de porta, linhas de janela), pé-direito do rótulo "P.D.", cotas e título |
 
 ---
 
@@ -217,6 +235,9 @@ Autodesk App Store. O AutoCAD lê o `PackageContents.xml` na abertura (`SeriesMi
   o AutoCAD só atualiza em certos momentos (ex.: `ZOOM E`); a resposta indica a origem (`source`).
 - `list_layers` com contagem abre todas as entidades: pode demorar em desenhos enormes
   (`include_counts: false`).
+- `generate_elevation` faz uma parede reta por vez e devolve uma **base**: portas com 2,10 m e
+  janelas com peitoril 1,10 e topo 2,10 por padrão (ajustáveis). Ainda não desenha marcenaria,
+  revestimentos nem paredes inclinadas ou curvas. Mostre o `dry_run` ao usuário antes de desenhar.
 
 ---
 
@@ -225,7 +246,9 @@ Autodesk App Store. O AutoCAD lê o `PackageContents.xml` na abertura (`SeriesMi
 ```
 AcadBridge.Mcp/        servidor MCP (net8.0, console). Program.cs = protocolo; Tools.cs = catálogo; BridgeClient.cs = canal local
 AcadBridge.Plugin/     plugin (net8.0-windows, x64). BridgeServer.cs = TCP + thread principal + undo;
-                       DrawingQueries.cs = leitura; DrawingEdits.cs = escrita; DocumentRegistry.cs = vários desenhos
+                       DrawingQueries.cs = leitura; DrawingEdits.cs = escrita; DocumentRegistry.cs = vários desenhos;
+                       GeometryReader.cs = geometria (entra em blocos/XREFs); DrawingPrimitives.cs = draw_entities;
+                       Elevation.cs = generate_elevation
 bundle/                PackageContents.xml (modelo) + install-bundle.ps1 (compila e monta o .bundle)
 setup.ps1              instalação completa: pré-requisitos, MCP, bundle, registro no agente, verificação
 scripts/build-release.ps1   gera dist/AcadBridge.zip (o pacote pronto das Releases)

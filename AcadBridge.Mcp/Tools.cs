@@ -14,6 +14,7 @@ internal static class Tools
     {
         "list_documents", "get_drawing_summary", "list_layers", "list_blocks", "get_selection", "capture_view",
         "create_layer", "update_layer", "move_selection_to_layer",
+        "read_geometry", "draw_entities", "generate_elevation",   // v0.4
     };
 
     public static JsonArray Definitions() => new()
@@ -112,7 +113,101 @@ internal static class Tools
              {
                  ["layer"] = new JsonObject { ["type"] = "string", ["description"] = "Nome da layer de destino (deve existir)." },
              }, Kind.Modifies, "layer"),
+
+        // ---------------- v0.4: geometria, desenho e vistas ----------------
+        Tool("read_geometry",
+             "Lê a GEOMETRIA do desenho como o usuário vê: entra em blocos e XREFs (plantas costumam estar num XREF base " +
+             "ou num bloco 'PAVIMENTO') e devolve coordenadas reais (WCS): linhas, polilinhas (pontos), arcos, círculos, " +
+             "textos, cotas, hachuras, com layer efetiva e origem (xref:/block:). Filtre por região, seleção, layers e tipos. " +
+             "ATENÇÃO: em desenhos reais nomes de layers/blocos podem enganar (paredes na layer 0, porta num bloco 'cadeira'): " +
+             "interprete pela geometria. Traz também um palpite de unidade (o INSUNITS do arquivo costuma estar errado).",
+             new JsonObject
+             {
+                 ["region"] = new JsonObject
+                 {
+                     ["type"] = "object",
+                     ["description"] = "Janela retangular em coordenadas do desenho: {min:[x,y], max:[x,y]}.",
+                     ["properties"] = new JsonObject { ["min"] = Point2(), ["max"] = Point2() },
+                     ["required"] = new JsonArray("min", "max"),
+                 },
+                 ["use_selection"] = new JsonObject { ["type"] = "boolean", ["description"] = "Ler só os objetos selecionados no AutoCAD." },
+                 ["layers"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Filtro de layers com curingas (* ?), ex.: ['CE- Alvenaria', '*Esquadria*']." },
+                 ["types"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Tipos DXF, ex.: ['LINE','LWPOLYLINE','ARC','MTEXT']." },
+                 ["include_blocks"] = new JsonObject { ["type"] = "boolean", ["description"] = "Entrar em blocos e XREFs (padrão true)." },
+                 ["include_hidden"] = new JsonObject { ["type"] = "boolean", ["description"] = "Incluir layers desligadas/congeladas (padrão false)." },
+                 ["max_items"] = new JsonObject { ["type"] = "integer", ["minimum"] = 1, ["maximum"] = 3000, ["description"] = "Máximo de itens detalhados (padrão 300). As contagens cobrem tudo." },
+             }),
+
+        Tool("draw_entities",
+             "ALTERA O DESENHO (só acrescenta). Desenha um LOTE de objetos no Model numa única ação — um U desfaz o lote " +
+             "inteiro. Tipos: line {start,end}, polyline {points,closed}, rectangle {corner1,corner2}, circle {center,radius}, " +
+             "arc {center,radius,start_angle,end_angle em graus}, text {position,text,height,rotation,justify}, " +
+             "mtext {position,text,height,width}, dimension {p1,p2,dim_line_point,rotation (0=horizontal, 90=vertical; " +
+             "omitido=alinhada),text}, hatch {points,pattern (SOLID, ANSI31...),scale,color}, block {name,position,scale," +
+             "rotation,attributes{TAG:valor}}. Cada item aceita layer e color. Coordenadas nas unidades do desenho " +
+             "(confira com read_geometry). Valida tudo antes: um item inválido = nada é desenhado. Layers que não existem " +
+             "são criadas. Nunca desenhe por cima do desenho existente sem o usuário pedir.",
+             new JsonObject
+             {
+                 ["entities"] = new JsonObject
+                 {
+                     ["type"] = "array", ["minItems"] = 1, ["maxItems"] = 2000,
+                     ["items"] = new JsonObject { ["type"] = "object", ["required"] = new JsonArray("type") },
+                     ["description"] = "Lista de objetos, cada um com 'type' e seus campos (veja a descrição da ferramenta).",
+                 },
+                 ["layer"] = new JsonObject { ["type"] = "string", ["description"] = "Layer padrão do lote (padrão 'IA-DESENHO')." },
+             }, Kind.Additive, "entities"),
+
+        Tool("generate_elevation",
+             "ALTERA O DESENHO (só acrescenta), exceto com dry_run=true. Gera a VISTA (elevação) de uma parede a partir da " +
+             "planta: contorno com pé-direito, portas, janelas e vãos, cotas e título, ao lado da planta em layers IA-VISTA*. " +
+             "Entrada: uma linha sobre a FACE da parede, da ESQUERDA para a DIREITA de quem olha a parede de dentro do " +
+             "ambiente — o usuário desenha essa linha (com OSNAP nos cantos) e a deixa selecionada (use_selection=true), " +
+             "ou você passa wall_line. Paredes e vãos são reconhecidos pela geometria (entra em XREFs/blocos); o pé-direito " +
+             "vem do texto 'P.D.' do ambiente ou de height. FLUXO OBRIGATÓRIO: 1) chame com dry_run=true e mostre ao " +
+             "usuário as aberturas (tipo, largura, alturas), pé-direito e avisos; 2) corrija com 'openings' e 'height' " +
+             "conforme ele disser; 3) chame sem dry_run. Alturas e larguras dos parâmetros são em METROS; coordenadas em " +
+             "unidades do desenho. Um U desfaz a vista inteira.",
+             new JsonObject
+             {
+                 ["use_selection"] = new JsonObject { ["type"] = "boolean", ["description"] = "Usar a LINHA selecionada no AutoCAD como linha da parede." },
+                 ["wall_line"] = new JsonObject
+                 {
+                     ["type"] = "object",
+                     ["description"] = "Linha sobre a face da parede {start:[x,y], end:[x,y]}, da esquerda para a direita de quem olha de dentro do ambiente.",
+                     ["properties"] = new JsonObject { ["start"] = Point2(), ["end"] = Point2() },
+                     ["required"] = new JsonArray("start", "end"),
+                 },
+                 ["viewer_point"] = Point2("Opcional: um ponto dentro do ambiente; se a linha estiver ao contrário, ela é invertida."),
+                 ["flip"] = new JsonObject { ["type"] = "boolean", ["description"] = "Inverte o sentido da linha (olhar a parede pelo outro lado)." },
+                 ["dry_run"] = new JsonObject { ["type"] = "boolean", ["description"] = "Só analisa e devolve o que seria desenhado (nada é alterado). Use sempre primeiro." },
+                 ["height"] = new JsonObject { ["type"] = "number", ["description"] = "Pé-direito em metros (ex.: 2.60). Se omitido, lê o 'P.D.' do ambiente." },
+                 ["units"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("m", "cm", "mm"), ["description"] = "Unidade do desenho, se a dedução falhar ou estiver errada." },
+                 ["door_height"] = new JsonObject { ["type"] = "number", ["description"] = "Altura padrão de portas e vãos em metros (padrão 2.10)." },
+                 ["window_sill"] = new JsonObject { ["type"] = "number", ["description"] = "Peitoril padrão das janelas em metros (padrão 1.10)." },
+                 ["window_head"] = new JsonObject { ["type"] = "number", ["description"] = "Altura do topo das janelas em metros (padrão 2.10)." },
+                 ["openings"] = new JsonObject
+                 {
+                     ["type"] = "array",
+                     ["description"] = "Correções por abertura (índices do dry_run): [{index, kind: porta|janela|vão|parede, sill|bottom, head|top (m), label}]. kind 'parede' remove a abertura.",
+                     ["items"] = new JsonObject { ["type"] = "object", ["required"] = new JsonArray("index") },
+                 },
+                 ["origin"] = Point2("Onde desenhar a vista (canto inferior esquerdo, coordenadas do desenho). Padrão: abaixo de tudo o que existe."),
+                 ["title"] = new JsonObject { ["type"] = "string", ["description"] = "Título da vista (ex.: 'VISTA 7 - COZINHA')." },
+                 ["layer_prefix"] = new JsonObject { ["type"] = "string", ["description"] = "Prefixo das layers criadas (padrão 'IA-VISTA')." },
+             }, Kind.Additive),
     };
+
+    private static JsonObject Point2(string? description = null)
+    {
+        var o = new JsonObject
+        {
+            ["type"] = "array", ["minItems"] = 2, ["maxItems"] = 3,
+            ["items"] = new JsonObject { ["type"] = "number" },
+        };
+        if (description != null) o["description"] = description;
+        return o;
+    }
 
 
     // Propriedades comuns a create_layer/update_layer.

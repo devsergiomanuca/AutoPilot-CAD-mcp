@@ -24,6 +24,7 @@ internal static class DrawingEdits
     public static readonly HashSet<string> Methods = new(StringComparer.Ordinal)
     {
         "create_layer", "update_layer", "move_selection_to_layer",
+        "draw_entities", "generate_elevation",   // v0.4
     };
 
     public static object Run(Document doc, string method, JsonElement p) => method switch
@@ -31,8 +32,21 @@ internal static class DrawingEdits
         "create_layer" => CreateLayer(doc, p),
         "update_layer" => UpdateLayer(doc, p),
         "move_selection_to_layer" => MoveSelectionToLayer(doc, p),
+        "draw_entities" => DrawEntities.Run(doc, p),
+        "generate_elevation" => Elevation.Generate(doc, p),
         _ => throw new InvalidOperationException($"Método desconhecido: '{method}'."),
     };
+
+    /// <summary>
+    /// Chamadas de métodos de escrita que, com estes parâmetros, só LEEM (ex.: generate_elevation com
+    /// dry_run=true). Rodam pelo caminho de leitura: sem lock nomeado, sem passo de undo e liberadas mesmo
+    /// no modo somente leitura. Devolve null = não é o caso.
+    /// </summary>
+    public static object? ReadOnlyVariant(Document doc, string method, JsonElement p) =>
+        method == "generate_elevation" && p.ValueKind == JsonValueKind.Object && Has(p, "dry_run")
+        && p.GetProperty("dry_run").ValueKind == JsonValueKind.True
+            ? Elevation.DryRun(doc, p)
+            : null;
 
     /// <summary>
     /// update_layer que não mudaria nada: responde aqui, SEM abrir o lock nomeado — senão o AutoCAD
@@ -298,7 +312,7 @@ internal static class DrawingEdits
     };
 
     /// <summary>Aceita índice ACI 1–255 (número ou texto), "R,G,B" ou um nome básico (red/vermelho...).</summary>
-    private static Color ParseColor(JsonElement el)
+    internal static Color ParseColor(JsonElement el)
     {
         string s = el.ValueKind == JsonValueKind.Number ? el.GetRawText() : (el.GetString() ?? "").Trim();
         if (int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out int aci))
@@ -377,7 +391,7 @@ internal static class DrawingEdits
     // =====================================================================================
     private const string UndoHint = "Para desfazer: digite U no AutoCAD (desfaz esta ação inteira de uma vez).";
 
-    private static void Notify(Document doc, string what)
+    internal static void Notify(Document doc, string what)
     {
         try
         {

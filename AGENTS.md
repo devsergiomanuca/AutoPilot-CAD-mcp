@@ -16,7 +16,10 @@ e numa recusa por "aba ativa diferente" pergunte ao usuário.
   `Tools.cs` = catálogo (`tools/list`); `BridgeClient.cs` = lock file + TCP até o plugin.
 - `AcadBridge.Plugin/`: roda dentro do `acad.exe` (net8.0-windows, x64). `BridgeServer.cs` = TCP,
   token, thread principal e ordem das checagens; `DrawingQueries.cs` = leitura;
-  `DrawingEdits.cs` = escrita; `DocumentRegistry.cs` = ids de desenho e recusa por aba errada.
+  `DrawingEdits.cs` = escrita; `DocumentRegistry.cs` = ids de desenho e recusa por aba errada;
+  `GeometryReader.cs` = percorre Model + blocos + XREFs em WCS (base de read_geometry e das vistas),
+  unidade deduzida e leitura de JSON; `DrawingPrimitives.cs` = `Canvas` (pincel usado por toda escrita
+  que desenha) e draw_entities; `Elevation.cs` = generate_elevation (análise geométrica + desenho).
 - `bundle/`: manifesto + `install-bundle.ps1`. `setup.ps1`: instalação completa.
 
 **Regras que não podem quebrar**
@@ -42,6 +45,12 @@ e numa recusa por "aba ativa diferente" pergunte ao usuário.
 7. **Compatibilidade entre versões**: MCP novo + plugin antigo deve falhar com mensagem clara, nunca
    com crash. Campos novos no protocolo local são opcionais.
 8. Mensagens ao usuário/modelo em **português**.
+9. **Desenhos reais mentem nos nomes**: paredes na layer 0, porta num bloco "cadeira", INSUNITS
+   declarando mm num desenho em metros. Reconheça elementos pela **geometria** e deduza a unidade pelas
+   medidas. Toda leitura de planta passa pelo `GeometryReader` (entra em XREFs e blocos).
+10. Ferramenta que desenha a partir de análise: ofereça `dry_run` (pelo `ReadOnlyVariant`: sem undo,
+    liberado em somente leitura) e devolva a **evidência** de cada decisão, para o usuário confirmar.
+11. Desenhe sempre **ao lado** do existente, em layers próprias (`IA-…`), nunca por cima.
 
 **Build e teste**
 ```powershell

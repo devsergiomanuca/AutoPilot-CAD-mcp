@@ -102,7 +102,17 @@ internal static class Program
                 "VÁRIOS DESENHOS: as ferramentas agem na aba ATIVA do AutoCAD. A primeira chamada fixa esta conversa " +
                 "nessa aba; toda resposta começa com 'Desenho: ...'. Se o usuário trocar de aba, as chamadas são " +
                 "recusadas (nada é lido nem alterado): pergunte se ele quer trabalhar no outro desenho e, se sim, use " +
-                "set_target_document; se não, peça para ele voltar à aba anterior.",
+                "set_target_document; se não, peça para ele voltar à aba anterior. " +
+                "GEOMETRIA: para entender a planta (paredes, vãos, textos), use read_geometry — ela entra em XREFs e blocos. " +
+                "Não confie em nomes de layers/blocos; confira pela geometria. Unidades: o arquivo pode declarar mm e estar " +
+                "em metros ou cm; use o palpite de unidade e as medidas. " +
+                "VISTAS: para a vista de uma parede, peça ao usuário para desenhar uma linha sobre a face da parede (da esquerda " +
+                "para a direita, olhando de dentro do ambiente, com OSNAP nos cantos) e deixá-la selecionada; chame " +
+                "generate_elevation com use_selection=true e dry_run=true, mostre o que foi detectado, corrija com o usuário e só " +
+                "então gere. Depois confira com capture_view. Para acabamentos (cores, revestimentos), use draw_entities " +
+                "(hachura + texto) dentro da vista, em layers próprias. " +
+                "UNDO: zoom e pan também entram no histórico do AutoCAD. Se o usuário navegou depois da sua ação, o " +
+                "primeiro U desfaz a navegação; oriente a apertar Esc e dar U até aparecer 'ACADBRIDGE_…' na linha de comando.",
         };
     }
 
