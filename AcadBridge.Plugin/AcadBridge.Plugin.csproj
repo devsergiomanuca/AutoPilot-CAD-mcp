@@ -10,7 +10,7 @@
     <EnableDynamicLoading>true</EnableDynamicLoading>
     <AssemblyName>AcadBridge.Plugin</AssemblyName>
     <RootNamespace>AcadBridge.Plugin</RootNamespace>
-    <Version>0.5.1</Version>
+    <Version>0.5.2</Version>
   </PropertyGroup>
   <ItemGroup>
     <!-- API .NET do AutoCAD 2025 pelos pacotes oficiais da Autodesk (série 25.0 = AutoCAD 2025, net8.0).

@@ -244,7 +244,8 @@ internal static class GeometryReader
                 {
                     string l = Alias(layerIds, it.Layer, "L");
                     string s = it.Source.Length > 0 ? " " + Alias(sourceIds, it.Source.TrimEnd('/'), "S") : "";
-                    items.Add($"{it.Handle} {type} {l}{s} {Compact(it.Entity)}");
+                    string col = ColorTag(it.Entity) is { } cc ? " cor=" + cc : "";
+                    items.Add($"{it.Handle} {type} {l}{s}{col} {Compact(it.Entity)}");
                 }
             }
             return true;
@@ -275,7 +276,8 @@ internal static class GeometryReader
             res["legend"] = "Cada item: <handle> <TIPO> <layer> [origem] <geometria>. Coordenadas em WCS (blocos/XREFs já " +
                             "transformados). handle = objeto do Model que contém o item (num XREF/bloco, é a inserção). " +
                             "x,y>x,y = linha; pts= vértices (polilinha; 'arc' = tem trechos curvos); c= centro; r= raio; " +
-                            "a= ângulos em graus; box= retângulo envolvente; L= comprimento; A= área; h= altura do texto. " +
+                            "a= ângulos em graus; box= retângulo envolvente; L= comprimento; A= área; h= altura do texto; cor= cor própria " +
+                            "(ausente = ByLayer). " +
                             "Nomes de layers e blocos podem enganar: confira pela geometria. format='full' dá JSON detalhado.";
             res["layers"] = layerIds.ToDictionary(kv => kv.Value, kv => kv.Key);
             if (sourceIds.Count > 0) res["sources"] = sourceIds.ToDictionary(kv => kv.Value, kv => kv.Key);
@@ -335,6 +337,16 @@ internal static class GeometryReader
         }
     }
 
+    /// <summary>Cor do objeto quando NÃO é ByLayer (ACI, R,G,B ou byblock); null = segue a layer.</summary>
+    internal static string? ColorTag(Entity e)
+    {
+        var c = e.Color;
+        if (c.IsByLayer) return null;
+        if (c.IsByBlock) return "byblock";
+        if (c.IsByAci) return c.ColorIndex.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return $"{c.Red},{c.Green},{c.Blue}";
+    }
+
     private static object Describe(Item it)
     {
         Entity e = it.Entity;
@@ -345,6 +357,7 @@ internal static class GeometryReader
             ["handle"] = it.Handle,
         };
         if (it.Source.Length > 0) d["source"] = it.Source.TrimEnd('/');
+        if (ColorTag(e) is { } col) d["color"] = col;
         switch (e)
         {
             case Line l:

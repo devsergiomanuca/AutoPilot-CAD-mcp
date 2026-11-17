@@ -78,9 +78,9 @@ internal static class EntityEdits
                 case "mirror":
                     if (op.KeepOriginal)
                     {
-                        foreach (Entity e in Clone(db, tr, op.Ids, ms)) { e.TransformBy(op.Xf); created.Add(e.Handle.ToString()); n++; }
+                        foreach (Entity e in Clone(db, tr, op.Ids, ms)) { Mirror(db, e, op.Xf); created.Add(e.Handle.ToString()); n++; }
                     }
-                    else foreach (ObjectId id in op.Ids) { Open(tr, id).TransformBy(op.Xf); n++; }
+                    else foreach (ObjectId id in op.Ids) { Mirror(db, Open(tr, id), op.Xf); n++; }
                     break;
                 case "copy":
                     for (int k = 1; k <= op.Count; k++)
@@ -196,6 +196,7 @@ internal static class EntityEdits
                 op.Ids = ids.ToArray();
                 ParseAction(op, o, tr, lt, db);
                 if (op.Action == "erase") foreach (ObjectId id in op.Ids) erased.Add(id);
+                if (op.Action == "set_props" && op.Color != null && BlockColorNote(tr, op.Ids) is { } note) plan.Warnings.Add(note);
                 plan.Ops.Add(op);
             }
             catch (InvalidOperationException ex)
@@ -204,8 +205,47 @@ internal static class EntityEdits
             }
         }
         if (plan.Ops.Any(x => x.Action == "mirror") && plan.Described.Values.Any(d => d.Contains(" TEXT ") || d.Contains(" MTEXT ")))
-            plan.Warnings.Add("Textos espelhados podem ficar invertidos (leitura de trás para frente). Confira com capture_view.");
+            plan.Warnings.Add(doc.Database.Mirrtext
+                ? "MIRRTEXT=1 neste desenho: textos espelhados ficam invertidos (leitura de trás para frente), como no comando MIRROR."
+                : "Textos vão para a posição espelhada sem inverter a leitura (como o MIRROR do AutoCAD com MIRRTEXT=0).");
         return plan;
+    }
+
+    /// <summary>A cor de um INSERT só aparece nos objetos do bloco que estão ByBlock (os outros têm cor própria ou ByLayer).</summary>
+    private static string? BlockColorNote(Transaction tr, ObjectId[] ids)
+    {
+        var names = new List<string>();
+        foreach (ObjectId id in ids)
+        {
+            if (tr.GetObject(id, OpenMode.ForRead) is not BlockReference br) continue;
+            var btr = (BlockTableRecord)tr.GetObject(br.BlockTableRecord, OpenMode.ForRead);
+            int total = 0, byBlock = 0;
+            foreach (ObjectId eid in btr)
+            {
+                if (tr.GetObject(eid, OpenMode.ForRead) is not Entity e) continue;
+                total++;
+                if (e.Color.IsByBlock) byBlock++;
+            }
+            if (total > 0 && byBlock < total) names.Add($"{btr.Name} ({byBlock} de {total} ByBlock)");
+            if (names.Count >= 5) break;
+        }
+        return names.Count == 0 ? null
+            : $"A cor de um bloco só aparece nos objetos dele que estão ByBlock; os outros mantêm a cor própria/da layer. Bloco(s): {string.Join("; ", names)}. Para mudar a cor visível é preciso editar o bloco (BEDIT) ou mudar a cor das layers dele.";
+    }
+
+    /// <summary>
+    /// Espelha como o comando MIRROR: com MIRRTEXT=0 (o padrão) um texto só muda de LUGAR (o centro dele vai para a
+    /// posição espelhada) e continua legível. TransformBy puro deixava o texto de trás para frente.
+    /// </summary>
+    private static void Mirror(Database db, Entity e, Matrix3d xf)
+    {
+        if (!db.Mirrtext && e is DBText or MText && GeometryReader.TryExtents(e, Matrix3d.Identity, out Extents3d ex))
+        {
+            Point3d c = ex.MinPoint + (ex.MaxPoint - ex.MinPoint) / 2;
+            e.TransformBy(Matrix3d.Displacement(c.TransformBy(xf) - c));
+            return;
+        }
+        e.TransformBy(xf);
     }
 
     private static ObjectId Resolve(Database db, string h)
@@ -345,8 +385,9 @@ internal static class EntityEdits
             action = executed ? "edit_entities" : "edit_entities (dry_run: nada foi alterado)",
             operations = plan.Ops.Select(o => $"{o.Index}. {o.Summary}"),
             objects_affected = plan.Described.Count,
-            objects = plan.Described.Values.Take(maxListed),
-            objects_truncated = plan.Described.Count > maxListed ? true : (bool?)null,
+            // executado: a lista completa já foi vista no dry_run; aqui só uma amostra (economiza tokens)
+            objects = plan.Described.Values.Take(executed ? 10 : maxListed),
+            objects_truncated = plan.Described.Count > (executed ? 10 : maxListed) ? true : (bool?)null,
             counts,
             created_handles = created is { Count: > 0 } ? created.Take(300) : null,
             warnings = plan.Warnings.Count > 0 ? plan.Warnings : null,

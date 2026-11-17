@@ -113,11 +113,14 @@ internal static class Elevation
 
         double uf = a.Unit.PerMeter;
         double txt = TextHeight(db, a.H);
+        c.FitDims(Math.Max(a.L, a.H), txt);   // cotas com o mesmo tamanho dos textos da vista (DIMSCALE de outra escala não estoura)
         Point3d W(double x, double y) => new(origin.X + x, origin.Y + y, 0);
         Point2d W2(double x, double y) => new(origin.X + x, origin.Y + y);
         Point2d[] RectPts(double x0, double y0, double x1, double y1) => new[] { W2(x0, y0), W2(x1, y0), W2(x1, y1), W2(x0, y1) };
         double sideT = a.SideWalls ? a.SideT : 0;
-        double cutScale = 0.01 * uf;   // ANSI31 com ~3 cm entre linhas, em qualquer unidade
+        // ANSI31 com ~3 cm entre linhas, em qualquer unidade. Com MEASUREMENT=English o AutoCAD usa o acad.pat (em
+        // polegadas: 0,125 entre linhas, 25,4× mais denso que o acadiso.pat), e a hachura parecia sólida.
+        double cutScale = 0.01 * uf * (db.Measurement == MeasurementValue.Metric ? 1 : 25.4);
 
         // acabamentos primeiro: hachuras criadas antes ficam por baixo das linhas
         if (a.Finishes.Count > 0) c.Layer(lFin, 8);
@@ -661,21 +664,43 @@ internal static class Elevation
     /// </summary>
     private static Point3d AutoOrigin(Database db, Analysis a)
     {
+        // Procura um lugar VAZIO perto da parede: primeiro abaixo, depois à direita, à esquerda e acima, afastando
+        // aos poucos. "Abaixo do que existe a 12 m" caía em cima de hachuras grandes (paisagismo) que passavam da
+        // vizinhança. Objetos enormes (contorno do terreno, eixos) não contam: tudo ficaria "ocupado".
         double uf = a.Unit.PerMeter;
         double minX = Math.Min(a.Start.X, a.End.X), minY = Math.Min(a.Start.Y, a.End.Y);
-        var near = new Extents3d(new Point3d(minX - 12 * uf, minY - 12 * uf, -1e9),
-                                 new Point3d(Math.Max(a.Start.X, a.End.X) + 12 * uf, Math.Max(a.Start.Y, a.End.Y) + 12 * uf, 1e9));
-        double low = minY;
+        double maxX = Math.Max(a.Start.X, a.End.X), maxY = Math.Max(a.Start.Y, a.End.Y);
+        double w = a.L + 5.0 * uf, h = a.H + 3.0 * uf;       // vista + cotas à direita/abaixo + chamadas + título
+        double reach = 60 * uf;
+        var near = new Extents3d(new Point3d(minX - reach, minY - reach, -1e9), new Point3d(maxX + reach, maxY + reach, 1e9));
+        var boxes = new List<Extents3d>();
         using (Transaction tr = db.TransactionManager.StartOpenCloseTransaction())
         {
             GeometryReader.Walk(db, tr, new GeometryReader.Options { Region = near }, it =>
             {
-                if (GeometryReader.TryExtents(it.Entity, Matrix3d.Identity, out Extents3d ex))
-                    low = Math.Min(low, Math.Max(ex.MinPoint.Y, near.MinPoint.Y));
-                return true;
+                if (GeometryReader.TryExtents(it.Entity, Matrix3d.Identity, out Extents3d ex) &&
+                    !(ex.MaxPoint.X - ex.MinPoint.X > 50 * uf && ex.MaxPoint.Y - ex.MinPoint.Y > 50 * uf))   // só ignora o que é enorme nas DUAS direções
+                    boxes.Add(ex);
+                return boxes.Count < 200_000;
             });
         }
-        return new Point3d(minX, low - a.H - 2.0 * uf, 0);
+        // canto inferior esquerdo da área livre → origem da vista (a vista ocupa x0+1..x0+1+L, y0+2..y0+2+H)
+        bool Free(double x0, double y0) => !boxes.Any(b => b.MinPoint.X < x0 + w && b.MaxPoint.X > x0 && b.MinPoint.Y < y0 + h && b.MaxPoint.Y > y0);
+        double step = 2.0 * uf;
+        for (int k = 0; k * step <= reach; k++)
+        {
+            double d = k * step;
+            var tries = new (double X, double Y)[]
+            {
+                (minX - 1 * uf, minY - 1 * uf - h - d),     // abaixo
+                (maxX + 1 * uf + d, minY - 2 * uf),         // à direita
+                (minX - 1 * uf - w - d, minY - 2 * uf),     // à esquerda
+                (minX - 1 * uf, maxY + 1 * uf + d),         // acima
+            };
+            foreach ((double x0, double y0) in tries)
+                if (Free(x0, y0)) return new Point3d(x0 + 1 * uf, y0 + 2 * uf, 0);
+        }
+        return new Point3d(minX, minY - reach - a.H, 0);    // nada livre por perto: abaixo de tudo
     }
 
     private static string Short(Opening o) => o.Kind switch { "porta" => $"P{o.Index}", "janela" => $"J{o.Index}", _ => $"V{o.Index}" };

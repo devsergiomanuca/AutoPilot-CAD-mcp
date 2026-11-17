@@ -268,7 +268,7 @@ internal static class DrawingEdits
 
         public static LayerSpec Parse(JsonElement p) => new()
         {
-            Color = Has(p, "color") ? ParseColor(p.GetProperty("color")) : null,
+            Color = Has(p, "color") ? LayerColor(ParseColor(p.GetProperty("color"))) : null,
             Linetype = OptString(p, "linetype")?.Trim(),
             LineWeight = Has(p, "lineweight") ? ParseLineweight(p.GetProperty("lineweight")) : null,
             Plottable = OptBool(p, "plottable"),
@@ -321,10 +321,18 @@ internal static class DrawingEdits
         ["gray"] = 8, ["grey"] = 8, ["cinza"] = 8,
     };
 
-    /// <summary>Aceita índice ACI 1–255 (número ou texto), "R,G,B" ou um nome básico (red/vermelho...).</summary>
+    private static Color LayerColor(Color c) =>
+        c.IsByLayer || c.IsByBlock ? throw new InvalidOperationException("Uma layer precisa de cor própria (ACI 1–255, 'R,G,B' ou nome); 'bylayer'/'byblock' valem só para objetos.") : c;
+
+    /// <summary>Aceita 'bylayer'/'byblock', índice ACI 1–255 (número ou texto), "R,G,B" ou um nome básico (red/vermelho...).</summary>
     internal static Color ParseColor(JsonElement el)
     {
         string s = el.ValueKind == JsonValueKind.Number ? el.GetRawText() : (el.GetString() ?? "").Trim();
+        switch (s.ToLowerInvariant().Replace(" ", "").Replace("_", ""))
+        {
+            case "bylayer" or "porlayer" or "dalayer" or "256": return Color.FromColorIndex(ColorMethod.ByLayer, 256);
+            case "byblock" or "porbloco" or "dobloco" or "0": return Color.FromColorIndex(ColorMethod.ByBlock, 0);
+        }
         if (int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out int aci))
         {
             if (aci is < 1 or > 255) throw new InvalidOperationException($"Cor ACI deve estar entre 1 e 255 (recebido {aci}).");
@@ -335,7 +343,7 @@ internal static class DrawingEdits
             return Color.FromRgb(byte.Parse(rgb[0].Trim()), byte.Parse(rgb[1].Trim()), byte.Parse(rgb[2].Trim()));
         if (ColorNames.TryGetValue(s, out short named))
             return Color.FromColorIndex(ColorMethod.ByAci, named);
-        throw new InvalidOperationException($"Cor inválida: '{s}'. Use ACI 1–255 (ex.: 1=vermelho, 3=verde, 5=azul, 8=cinza), 'R,G,B' ou um nome básico.");
+        throw new InvalidOperationException($"Cor inválida: '{s}'. Use 'bylayer', 'byblock', ACI 1–255 (ex.: 1=vermelho, 3=verde, 5=azul, 8=cinza), 'R,G,B' ou um nome básico.");
     }
 
     /// <summary>Espessura em mm (0.25, 0.5...) ou "default". Só valores da tabela padrão do AutoCAD.</summary>

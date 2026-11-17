@@ -16,9 +16,13 @@ internal static class Program
     // Versão vem do <Version> do .csproj (única fonte da verdade).
     private static readonly string Version = typeof(Program).Assembly.GetName().Version!.ToString(3);
     // UnsafeRelaxedJsonEscaping: mantém "+", acentos e "ç" legíveis (o texto vai para o modelo, não para HTML).
+    // Sem indentação: ~40% de cada resposta eram espaços e quebras de linha (tokens pagos, nenhuma informação).
+    private const int DefaultCaptureW = 1024, DefaultCaptureH = 640;
+    private static bool _legendSent;   // por processo = por conversa
+
     private static readonly JsonSerializerOptions Pretty = new()
     {
-        WriteIndented = true,
+        WriteIndented = false,
         Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 
@@ -111,12 +115,18 @@ internal static class Program
                 "generate_elevation com use_selection=true e dry_run=true, mostre o que foi detectado, corrija com o usuário e só " +
                 "então gere. Pergunte forro, rodapé e acabamentos (cores/revestimentos por trecho) e passe em ceiling_height, " +
                 "baseboard e finishes. Depois enquadre com zoom_to e confira com capture_view. " +
-                "HACHURAS: para hachurar paredes ou áreas use hatch_regions (contorno achado pelo AutoCAD); nunca monte o " +
+                "HACHURAS: para hachurar paredes ou áreas use hatch_regions (contorno calculado pela geometria); nunca monte o " +
                 "polígono à mão juntando linhas. Paredes: mode='walls' com region ou a seleção do usuário (um apartamento/" +
-                "trecho por vez). " +
+                "trecho por vez); na execução, repita a 'region' que o dry_run devolveu. Pisos/ambientes: mode='points' com um " +
+                "ponto dentro de cada ambiente (a região sai sozinha; portas de giro contam como fechadas). Leia os 'warnings': " +
+                "trazem a área conferida com o texto 'A=' do ambiente e o espaçamento real do padrão. " +
+                "CORES: sem 'color' tudo é criado ByLayer (cor da layer); prefira escolher a cor pela layer. " +
                 "EDITAR O QUE EXISTE:read_geometry dá o handle de cada objeto; edit_entities move/copia/gira/espelha/escala/" +
                 "apaga/muda layer, cor e textos por handle. Sempre: dry_run=true → select_entities para o usuário ver quais " +
                 "objetos são → só com o ok dele, execute. Nunca apague nem altere o que o usuário não pediu. " +
+                "RAPIDEZ: cada chamada custa uma ida e volta; agrupe (draw_entities e edit_entities aceitam lotes), " +
+                "use read_geometry com region pequena e types, e capture_view só para conferir o visual (os números " +
+                "das respostas já dizem o que foi feito). " +
                 "UNDO: zoom e pan também entram no histórico do AutoCAD. Se o usuário navegou depois da sua ação, o " +
                 "primeiro U desfaz a navegação; oriente a apertar Esc e dar U até aparecer 'ACADBRIDGE_…' na linha de comando.",
         };
@@ -158,6 +168,8 @@ internal static class Program
 
             JsonObject sent = args.DeepClone().AsObject();
             if (_target != null) { sent["document_id"] = _target.Id; sent["acad_pid"] = _target.Pid; }
+            // imagem padrão menor: ~550 tokens em vez de ~850; o modelo pode pedir maior quando precisar de detalhe
+            if (name == "capture_view") { sent["width"] ??= DefaultCaptureW; sent["height"] ??= DefaultCaptureH; }
             BridgeClient.Reply reply = await BridgeClient.CallFullAsync(name, sent);
             JsonNode result = reply.Result;
             string where = DocumentHeader(reply.Document);
@@ -168,8 +180,8 @@ internal static class Program
                 // Tamanho real lido do próprio PNG (fonte da verdade; funciona até com plugin antigo,
                 // que devolvia o tamanho PEDIDO em width/height).
                 (int w, int h) = PngSize(Convert.FromBase64String(data));
-                int reqW = Math.Clamp(args["width"]?.GetValue<int>() ?? 1280, 256, 2048);
-                int reqH = Math.Clamp(args["height"]?.GetValue<int>() ?? 800, 256, 2048);
+                int reqW = Math.Clamp(args["width"]?.GetValue<int>() ?? DefaultCaptureW, 256, 2048);
+                int reqH = Math.Clamp(args["height"]?.GetValue<int>() ?? DefaultCaptureH, 256, 2048);
                 string size = w == reqW && h == reqH
                     ? $"{w}x{h} px"
                     : $"{w}x{h} px (pedido {reqW}x{reqH}; o AutoCAD mantém a proporção da janela)";
@@ -182,6 +194,11 @@ internal static class Program
                     },
                     ["isError"] = false,
                 };
+            }
+            // a legenda do formato compacto vai só na 1ª leitura da conversa (o modelo já a tem no contexto)
+            if (name == "read_geometry" && result is JsonObject ro && ro.ContainsKey("legend"))
+            {
+                if (_legendSent) ro.Remove("legend"); else _legendSent = true;
             }
             return Text(where + result.ToJsonString(Pretty));
         }

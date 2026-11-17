@@ -59,17 +59,26 @@ internal sealed class Canvas
     {
         e.SetDatabaseDefaults(_db);
         e.LayerId = Layer(layer);
-        if (color != null) e.Color = color;
+        // SetDatabaseDefaults copia a cor/linha/espessura ATUAIS do usuário (CECOLOR, CELTYPE, CELWEIGHT).
+        // Num desenho com cor atual amarela, tudo saía amarelo. O que a IA cria segue a LAYER (ByLayer).
+        e.Color = color ?? Color.FromColorIndex(ColorMethod.ByLayer, 256);
+        e.Linetype = "ByLayer";
+        e.LineWeight = LineWeight.ByLayer;
         _space.AppendEntity(e);
         _tr.AddNewlyCreatedDBObject(e, true);
         string type = e.GetRXClass().DxfName;
         Counts[type] = Counts.GetValueOrDefault(type) + 1;
         if (Handles.Count < 60) Handles.Add(e.Handle.ToString());
+        Grow(e);
+        return e;
+    }
+
+    private void Grow(Entity e)
+    {
         if (GeometryReader.TryExtents(e, Matrix3d.Identity, out Extents3d ex))
         {
             if (_bounds is { } b) { b.AddExtents(ex); _bounds = b; } else _bounds = ex;
         }
-        return e;
     }
 
     public Line Line(Point3d a, Point3d b, string layer, Color? c = null) => Add(new Line(a, b), layer, c);
@@ -105,6 +114,30 @@ internal sealed class Canvas
         return Add(m, layer, c);
     }
 
+    /// <summary>
+    /// Fator final de DIMSCALE das cotas desta ação (null = como o usuário configurou). Mexer só no DIMSCALE
+    /// mantém as proporções do estilo dele (seta, folga, ticks) e muda só o tamanho.
+    /// </summary>
+    public double? DimScale;
+
+    /// <summary>
+    /// Confere se as cotas sairiam com tamanho absurdo para as medidas (o arquivo pode estar com DIMSCALE de outra
+    /// unidade/escala: INSUNITS cm num desenho em metros). Texto fora de [maior/300, maior/8] → maior/40, com
+    /// aviso. 'wanted' (altura de texto pedida) tem prioridade.
+    /// </summary>
+    public string? FitDims(double largest, double? wanted = null)
+    {
+        using DimStyleTableRecord cur = _db.GetDimstyleData();
+        double sc = cur.Dimscale > 0 ? cur.Dimscale : 1;
+        double txt = cur.Dimtxt > 0 ? cur.Dimtxt : 0.18;
+        double h = txt * sc;
+        if (wanted is { } w && w > 0) { DimScale = w / txt; return null; }
+        if (largest <= 0 || (h >= largest / 300 && h <= largest / 8)) return null;
+        double target = largest / 40;
+        DimScale = target / txt;
+        return $"Cotas ajustadas: com o DIMTXT×DIMSCALE atual o texto teria {h:0.###} para medidas de até {largest:0.###}; usei texto {target:0.###} (mesmo estilo, só DIMSCALE). Para outro tamanho, informe text_height.";
+    }
+
     /// <summary>Cota alinhada (rotation null) ou girada (rotation em radianos: 0 = horizontal, π/2 = vertical).</summary>
     public Dimension Dim(Point3d p1, Point3d p2, Point3d dimLine, double? rotation, string layer, string? text = null)
     {
@@ -116,7 +149,24 @@ internal sealed class Canvas
         // Aplicado DEPOIS do Add: o SetDatabaseDefaults dentro do Add reatribui o estilo.
         Add(d, layer);
         using (DimStyleTableRecord current = _db.GetDimstyleData()) d.SetDimstyleData(current);
+        if (DimScale is { } ds) d.Dimscale = ds;
+        try { d.RecomputeDimensionBlock(true); Grow(d); } catch { /* sem extensão: só não entra em bounds */ }
         return d;
+    }
+
+    /// <summary>
+    /// Aviso sobre a escala de padrões (achado real: NET escala 0.1 virou uma grade de 1,25 cm que parecia sólida).
+    /// MEASUREMENT=English → acad.pat (polegadas), 25,4× mais denso que o acadiso.pat do mesmo padrão.
+    /// </summary>
+    public static string? PatternNote(Database db, string pattern, double scale, Units.Guess? unit)
+    {
+        if (pattern.Equals("SOLID", StringComparison.OrdinalIgnoreCase)) return null;
+        bool english = db.Measurement != MeasurementValue.Metric;
+        double baseSpacing = english ? 0.125 : 3.175;    // ANSI31/NET no arquivo de padrões em uso
+        string spacing = unit is { } u ? $"≈ {baseSpacing * scale / u.PerMeter * 100:0.##} cm" : $"≈ {baseSpacing * scale:0.####} unidades";
+        return $"Padrão {pattern.ToUpperInvariant()} na escala {scale}: espaçamento entre linhas {spacing} (referência ANSI31/NET; " +
+               (english ? "o desenho está em MEASUREMENT=English, padrões do acad.pat em polegadas). " : "padrões do acadiso.pat). ") +
+               "Abaixo de ~1 cm parece hachura sólida na tela; ajuste 'scale' na mesma proporção.";
     }
 
     /// <summary>Hachura com contorno externo e, opcionalmente, furos (ex.: portas e janelas dentro de uma pintura).</summary>
@@ -131,6 +181,7 @@ internal sealed class Canvas
         AppendLoop(h, boundary, HatchLoopTypes.External);
         if (holes != null) foreach (IReadOnlyList<Point2d> hole in holes) AppendLoop(h, hole, HatchLoopTypes.Default);
         h.EvaluateHatch(true);
+        Grow(h);   // só agora a hachura tem contorno (no Add ela ainda estava vazia)
         return h;
     }
 
@@ -145,6 +196,7 @@ internal sealed class Canvas
         AppendPolyLoop(h, outer, HatchLoopTypes.External | HatchLoopTypes.Polyline);
         foreach (Polyline pl in holes) AppendPolyLoop(h, pl, HatchLoopTypes.Default | HatchLoopTypes.Polyline);
         h.EvaluateHatch(true);
+        Grow(h);   // só agora a hachura tem contorno (no Add ela ainda estava vazia)
         return h;
     }
 
@@ -219,12 +271,13 @@ internal static class DrawEntities
 
         // 1) validação completa: cada item vira uma ação pronta para executar
         var actions = new List<Action<Canvas>>(items.Length);
+        var dims = new List<(double Len, double? H)>();
         using (Transaction rt = db.TransactionManager.StartOpenCloseTransaction())
         {
             var bt = (BlockTable)rt.GetObject(db.BlockTableId, OpenMode.ForRead);
             for (int i = 0; i < items.Length; i++)
             {
-                try { actions.Add(Parse(items[i], defaultLayer, bt)); }
+                try { actions.Add(Parse(items[i], defaultLayer, bt, dims)); }
                 catch (InvalidOperationException ex) { throw new InvalidOperationException($"Item {i} ({Json.Str(items[i], "type") ?? "?"}): {ex.Message} Nada foi desenhado."); }
             }
         }
@@ -232,6 +285,10 @@ internal static class DrawEntities
         // 2) desenho (uma transação; o lock nomeado do BridgeServer faz disso um único undo)
         using Transaction tr = db.TransactionManager.StartTransaction();
         var canvas = new Canvas(db, tr);
+        // cotas do lote com um só tamanho, coerente com a maior medida (ou com o text_height pedido)
+        string? dimWarning = dims.Count > 0
+            ? canvas.FitDims(dims.Max(d => d.Len), dims.Select(d => d.H).FirstOrDefault(h => h != null))
+            : null;
         foreach (Action<Canvas> a in actions) a(canvas);
         tr.Commit();
 
@@ -245,11 +302,12 @@ internal static class DrawEntities
             layers_created = canvas.CreatedLayers,
             bounds = canvas.Bounds,
             handles = canvas.Handles,
+            warnings = Warnings(db, items, dimWarning),
             undo = "Para desfazer: digite U no AutoCAD (desfaz este lote inteiro de uma vez).",
         };
     }
 
-    private static Action<Canvas> Parse(JsonElement it, string defaultLayer, BlockTable bt)
+    private static Action<Canvas> Parse(JsonElement it, string defaultLayer, BlockTable bt, List<(double Len, double? H)> dims)
     {
         string type = (Json.Str(it, "type") ?? throw new InvalidOperationException("falta 'type'.")).Trim().ToLowerInvariant();
         string layer = ValidLayer(Json.Str(it, "layer") ?? defaultLayer, "layer");
@@ -305,7 +363,7 @@ internal static class DrawEntities
                 string s = Json.Str(it, "text") ?? throw new InvalidOperationException("falta 'text'.");
                 double h = Pos("height"); double rot = Deg("rotation");
                 string just = (Json.Str(it, "justify") ?? "left").ToLowerInvariant();
-                if (just is not ("left" or "center" or "right")) throw new InvalidOperationException("'justify' deve ser left, center ou right.");
+                if (just is not ("left" or "center" or "right")) throw new InvalidOperationException($"'justify' deve ser left, center ou right (recebido '{just}').");
                 return c => c.Text(pos, s, h, rot, layer, just, color);
             }
             case "mtext":
@@ -320,6 +378,10 @@ internal static class DrawEntities
                 Point3d a = Json.Point(it, "p1", "p1"), b = Json.Point(it, "p2", "p2"), dl = Json.Point(it, "dim_line_point", "dim_line_point");
                 double? rot = Json.Has(it, "rotation") ? Deg("rotation") : null;
                 string? txt = Json.Str(it, "text");
+                double? th = Json.Has(it, "text_height") ? Pos("text_height") : null;
+                double len = rot is { } rr ? Math.Abs((b - a).DotProduct(new Vector3d(Math.Cos(rr), Math.Sin(rr), 0))) : a.DistanceTo(b);
+                if (len <= 0) throw new InvalidOperationException("p1 e p2 dão medida zero nessa direção.");
+                dims.Add((len, th));
                 return c => c.Dim(a, b, dl, rot, layer, txt);
             }
             case "hatch":
@@ -343,6 +405,16 @@ internal static class DrawEntities
             default:
                 throw new InvalidOperationException("tipo desconhecido. Use line, polyline, rectangle, circle, arc, text, mtext, dimension, hatch ou block.");
         }
+    }
+
+    private static List<string>? Warnings(Database db, JsonElement[] items, string? dimWarning)
+    {
+        var w = new List<string>();
+        if (dimWarning != null) w.Add(dimWarning);
+        foreach (var hp in items.Where(it => (Json.Str(it, "type") ?? "").Trim().Equals("hatch", StringComparison.OrdinalIgnoreCase))
+                                .Select(it => (Pattern: Json.Str(it, "pattern") ?? "SOLID", Scale: Json.Num(it, "scale") ?? 1)).Distinct())
+            if (Canvas.PatternNote(db, hp.Pattern, hp.Scale, null) is { } n) w.Add(n);
+        return w.Count > 0 ? w : null;
     }
 
     internal static string ValidLayer(string raw, string what)

@@ -89,8 +89,8 @@ internal static class Tools
              "width/height são o tamanho MÁXIMO: a imagem mantém a proporção da janela do AutoCAD e pode sair menor.",
              new JsonObject
              {
-                 ["width"] = new JsonObject { ["type"] = "integer", ["minimum"] = 256, ["maximum"] = 2048, ["description"] = "Largura máxima em px (padrão 1280)." },
-                 ["height"] = new JsonObject { ["type"] = "integer", ["minimum"] = 256, ["maximum"] = 2048, ["description"] = "Altura máxima em px (padrão 800)." },
+                 ["width"] = new JsonObject { ["type"] = "integer", ["minimum"] = 256, ["maximum"] = 2048, ["description"] = "Largura máxima em px (padrão 1024; aumente só se precisar ler detalhes)." },
+                 ["height"] = new JsonObject { ["type"] = "integer", ["minimum"] = 256, ["maximum"] = 2048, ["description"] = "Altura máxima em px (padrão 640)." },
              }),
 
         // ---------------- v0.2: edição (cada chamada = 1 grupo de undo no AutoCAD) ----------------
@@ -146,10 +146,10 @@ internal static class Tools
         Tool("draw_entities",
              "ALTERA O DESENHO (só acrescenta). Desenha um LOTE de objetos no Model numa única ação — um U desfaz o lote " +
              "inteiro. Tipos: line {start,end}, polyline {points,closed}, rectangle {corner1,corner2}, circle {center,radius}, " +
-             "arc {center,radius,start_angle,end_angle em graus}, text {position,text,height,rotation,justify}, " +
+             "arc {center,radius,start_angle,end_angle em graus}, text {position,text,height,rotation,justify: left|center|right}, " +
              "mtext {position,text,height,width}, dimension {p1,p2,dim_line_point,rotation (0=horizontal, 90=vertical; " +
-             "omitido=alinhada),text}, hatch {points,pattern (SOLID, ANSI31...),scale,color}, block {name,position,scale," +
-             "rotation,attributes{TAG:valor}}. Cada item aceita layer e color. Coordenadas nas unidades do desenho " +
+             "omitido=alinhada),text,text_height (opcional; sem ele o tamanho vem do DIMSCALE atual e é corrigido se ficar desproporcional às medidas)}, hatch {points,pattern (SOLID, ANSI31...),scale,color}, block {name,position,scale," +
+             "rotation,attributes{TAG:valor}}. Cada item aceita layer e color (sem color = ByLayer, a cor da layer). Coordenadas nas unidades do desenho " +
              "(confira com read_geometry). Valida tudo antes: um item inválido = nada é desenhado. Layers que não existem " +
              "são criadas. Nunca desenhe por cima do desenho existente sem o usuário pedir.",
              new JsonObject
@@ -222,7 +222,7 @@ internal static class Tools
              "ALTERA O DESENHO (pode mudar e APAGAR objetos existentes), exceto com dry_run=true. Edita objetos do Model " +
              "apontados por HANDLE (o read_geometry devolve o handle de cada item). Lote de operações aplicadas em ordem: " +
              "move {displacement:[dx,dy] ou from,to}, copy {displacement ou from,to, count}, rotate {base, angle em graus " +
-             "anti-horário}, scale {base, factor}, mirror {p1, p2, keep_original}, erase, set_props {layer, color}, " +
+             "anti-horário}, scale {base, factor}, mirror {p1, p2, keep_original}, erase, set_props {layer, color (ACI, nome ou 'bylayer')}, " +
              "set_text {text} (TEXT/MTEXT/cota), set_attributes {attributes:{TAG:valor}} (blocos). " +
              "FLUXO OBRIGATÓRIO: 1) dry_run=true e mostre ao usuário a lista de objetos afetados (use select_entities para " +
              "destacá-los na tela); 2) só com o ok dele, chame sem dry_run. Recusa objetos em layer travada, fora do Model " +
@@ -243,12 +243,12 @@ internal static class Tools
 
         Tool("hatch_regions",
              "ALTERA O DESENHO (só acrescenta hachuras), exceto com dry_run=true. Hachura áreas FECHADAS achando o contorno " +
-             "pelo algoritmo do próprio AutoCAD (como clicar dentro da área no comando HATCH) — NÃO monte polígonos de " +
+             "calculando o contorno pela geometria (como clicar dentro da área no comando HATCH, mas enxergando blocos e XREFs) — NÃO monte polígonos de " +
              "hachura à mão com draw_entities a partir de linhas soltas. Modos: 'walls' = hachura as PAREDES sozinho " +
              "(acha pares de linhas paralelas com espessura de parede numa região ou na seleção do usuário, entra em " +
              "blocos/XREFs, e REJEITA contornos que vazaram por parede aberta, dizendo onde); 'points' = um ponto DENTRO " +
-             "de cada área (ambiente, piso, peça). FLUXO: dry_run=true → diga quantas áreas e mostre as rejeitadas (o " +
-             "usuário pode fechar a parede com uma linha) → com o ok, chame sem dry_run. Um U desfaz todas as hachuras.",
+             "de cada área (ambiente, piso, peça; a região é deduzida dos pontos). FLUXO: dry_run=true → diga quantas áreas e mostre as rejeitadas (o " +
+             "usuário pode fechar a parede com uma linha) → com o ok, chame sem dry_run passando a 'region' que o dry_run devolveu. Um U desfaz todas as hachuras.",
              new JsonObject
              {
                  ["mode"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("walls", "points"), ["description"] = "walls (padrão sem 'points') ou points." },
@@ -256,7 +256,7 @@ internal static class Tools
                  ["region"] = new JsonObject
                  {
                      ["type"] = "object",
-                     ["description"] = "Região de trabalho {min:[x,y], max:[x,y]} (obrigatória no modo walls, se não usar a seleção).",
+                     ["description"] = "Região de trabalho {min:[x,y], max:[x,y]} (obrigatória no modo walls, se não usar a seleção; no modo points é deduzida dos pontos). O dry_run devolve a região usada: repita-a na execução.",
                      ["properties"] = new JsonObject { ["min"] = Point2(), ["max"] = Point2() },
                      ["required"] = new JsonArray("min", "max"),
                  },
@@ -265,10 +265,11 @@ internal static class Tools
                  ["min_thickness"] = new JsonObject { ["type"] = "number", ["description"] = "Modo walls: espessura mínima de parede em metros (padrão 0.07)." },
                  ["max_thickness"] = new JsonObject { ["type"] = "number", ["description"] = "Modo walls: espessura máxima em metros (padrão 0.40)." },
                  ["units"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("m", "cm", "mm"), ["description"] = "Unidade do desenho, se a dedução falhar." },
+                 ["close_doors"] = new JsonObject { ["type"] = "boolean", ["description"] = "Modo points: tratar portas de giro como FECHADAS para o contorno não sair pelo vão (padrão true)." },
                  ["include_nested"] = new JsonObject { ["type"] = "boolean", ["description"] = "Modo walls: hachurar também contornos de blocos DENTRO do bloco das paredes (por padrão são rejeitados: costumam ser janelas/portas/pilares)." },
                  ["pattern"] = new JsonObject { ["type"] = "string", ["description"] = "Padrão: SOLID (padrão), ANSI31, AR-CONC..." },
                  ["scale"] = new JsonObject { ["type"] = "number", ["description"] = "Escala do padrão (não vale para SOLID)." },
-                 ["color"] = new JsonObject { ["type"] = new JsonArray("string", "integer"), ["description"] = "Cor: ACI, 'R,G,B' ou nome." },
+                 ["color"] = new JsonObject { ["type"] = new JsonArray("string", "integer"), ["description"] = "Cor: ACI, 'R,G,B', nome ou 'bylayer' (padrão: ByLayer, a cor da layer)." },
                  ["layer"] = new JsonObject { ["type"] = "string", ["description"] = "Layer das hachuras (padrão 'IA-HACHURA'; criada se não existir)." },
                  ["dry_run"] = new JsonObject { ["type"] = "boolean", ["description"] = "Só acha os contornos e informa (nada é desenhado). Use sempre primeiro." },
              }, Kind.Additive),

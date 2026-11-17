@@ -39,6 +39,7 @@ internal static class HatchRegions
         public List<PlanarFaces.Face> Holes = new();
         public string? Rejected;
         public bool Nested;
+        public double? TextArea;
     }
 
     private sealed class Result
@@ -50,6 +51,8 @@ internal static class HatchRegions
         public double Seconds;
         public Units.Guess? Unit;
         public string Mode = "";
+        public Extents3d? Region;
+        public string RegionSource = "informada";
     }
 
     public static object DryRun(Document doc, JsonElement p) => Report(Analyze(doc, p), null, dry: true);
@@ -97,11 +100,12 @@ internal static class HatchRegions
         {
             PromptSelectionResult psr = doc.Editor.SelectImplied();
             if (psr.Status != PromptStatus.OK || psr.Value == null)
-                throw new InvalidOperationException("Nada selecionado. Peça ao usuário para selecionar a parte do desenho (ex.: as paredes de um apartamento) ou use 'region'.");
+                throw new InvalidOperationException("Nada selecionado. Peça ao usuário para selecionar a parte do desenho (ex.: as paredes de um apartamento) ou use 'region'. Se o dry_run já rodou, repita com a 'region' que ele devolveu.");
             using Transaction t0 = db.TransactionManager.StartOpenCloseTransaction();
             foreach (ObjectId id in psr.Value.GetObjectIds())
                 if (t0.GetObject(id, OpenMode.ForRead) is Entity e && GeometryReader.TryExtents(e, Matrix3d.Identity, out Extents3d ex))
                 { if (region is { } rg) { rg.AddExtents(ex); region = rg; } else region = ex; }
+            r.RegionSource = "da seleção do usuário";
         }
 
         var userSeeds = new List<Point2d>();
@@ -116,21 +120,70 @@ internal static class HatchRegions
             throw new InvalidOperationException("No modo 'walls' informe 'region' {min, max} ou use_selection=true (o usuário seleciona a parte da planta). Desenhos inteiros têm paredes demais e objetos que não são parede.");
 
         // geometria (entra em blocos/XREFs)
-        var (segs, straight, radii, tags, sources) = Collect(db, p, region);
-        r.Segments = segs.Count;
-        if (segs.Count == 0) throw new InvalidOperationException("Não há linhas nessa região (confira 'region' e 'layers').");
-        if (segs.Count > MaxSegments) throw new InvalidOperationException($"Linhas demais na região ({segs.Count}; máx. {MaxSegments}). Use uma região menor ou filtre por 'layers'.");
+        List<(Point2d A, Point2d B)> segs = new(), straight = new(); List<double> radii = new(); List<int> tags = new(); List<string> sources = new();
+        PlanarFaces faces = null!; double uf = 0, tol = 0;
+        Extra? extra = null;
+        bool Build(Extents3d? reg, bool throwIfTooMany)
+        {
+            (segs, straight, radii, tags, sources) = Collect(db, p, reg);
+            r.Segments = segs.Count;
+            if (segs.Count == 0) throw new InvalidOperationException("Não há linhas nessa região (confira 'region' e 'layers').");
+            if (segs.Count > MaxSegments)
+            {
+                if (!throwIfTooMany) return false;
+                throw new InvalidOperationException($"Linhas demais na região ({segs.Count}; máx. {MaxSegments}). Use uma região menor ou filtre por 'layers'.");
+            }
+            r.Unit = Units.FromName(Json.Str(p, "units")) ?? Units.GuessFromArcs(radii);
+            uf = r.Unit?.PerMeter ?? 0;
+            if (mode == "points")
+            {
+                // de novo, agora com a unidade: portas fechadas e textos de área (conferência)
+                extra = new Extra { DoorMin = 0.55 * uf, DoorMax = 1.3 * uf };
+                if (uf <= 0 || Json.Bool(p, "close_doors") == false) extra.DoorMax = -1;
+                (segs, straight, radii, tags, sources) = Collect(db, p, reg, extra);
+            }
+            // tolerância de fusão de vértices: 1 mm (ou um milionésimo do tamanho, sem unidade)
+            double size = Math.Max(segs.Max(s => Math.Max(s.A.X, s.B.X)) - segs.Min(s => Math.Min(s.A.X, s.B.X)),
+                                   segs.Max(s => Math.Max(s.A.Y, s.B.Y)) - segs.Min(s => Math.Min(s.A.Y, s.B.Y)));
+            tol = uf > 0 ? 0.001 * uf : Math.Max(size * 1e-6, 1e-6);
+            faces = new PlanarFaces(segs, tol, tags);
+            return true;
+        }
 
-        r.Unit = Units.FromName(Json.Str(p, "units")) ?? Units.GuessFromArcs(radii);
-        double uf = r.Unit?.PerMeter ?? 0;
+        if (mode == "points" && region == null)
+        {
+            // Região automática: caixa dos pontos + margem, crescendo até cada ponto cair numa área fechada que não
+            // encosta na borda da região (uma área que encosta pode estar cortada pela região ou aberta de verdade).
+            // Ler o desenho inteiro estourava o limite de linhas em plantas reais.
+            r.RegionSource = "automática (a partir dos pontos)";
+            double sx0 = userSeeds.Min(s => s.X), sx1 = userSeeds.Max(s => s.X), sy0 = userSeeds.Min(s => s.Y), sy1 = userSeeds.Max(s => s.Y);
+            double basis = db.Extmax.X > db.Extmin.X ? Math.Max(db.Extmax.X - db.Extmin.X, db.Extmax.Y - db.Extmin.Y) : 0;
+            double? perM = Units.FromName(Json.Str(p, "units"))?.PerMeter;
+            double[] margins = perM is { } pm
+                ? new[] { 4 * pm, 10 * pm, 25 * pm, 60 * pm }
+                : basis > 0 ? new[] { basis / 120, basis / 40, basis / 12, basis / 4 } : new[] { 1.0, 10, 100, 1000 };
+            Extents3d? lastOk = null;
+            foreach (double m in margins)
+            {
+                var reg = new Extents3d(new Point3d(sx0 - m, sy0 - m, 0), new Point3d(sx1 + m, sy1 + m, 0));
+                if (!Build(reg, throwIfTooMany: lastOk == null && m == margins[^1])) break;   // ficou grande demais: fica a anterior
+                lastOk = reg;
+                double edge = 2 * tol;
+                bool Inside(PlanarFaces.Face f) => f.Box.MinPoint.X > reg.MinPoint.X + edge && f.Box.MinPoint.Y > reg.MinPoint.Y + edge &&
+                                                   f.Box.MaxPoint.X < reg.MaxPoint.X - edge && f.Box.MaxPoint.Y < reg.MaxPoint.Y - edge;
+                if (userSeeds.All(s => faces.FaceAt(s) is { } f && Inside(f))) break;
+            }
+            if (lastOk == null)
+                throw new InvalidOperationException($"Linhas demais perto dos pontos (máx. {MaxSegments}). Informe 'region' {{min, max}} em volta das áreas ou filtre por 'layers'.");
+            region = lastOk;
+            if (r.Segments > MaxSegments) Build(region, throwIfTooMany: true);   // a última tentativa estourou: refaz a anterior
+        }
+        else Build(region, throwIfTooMany: true);
+        r.Region = region;
+        if (Canvas.PatternNote(db, pattern, Json.Num(p, "scale") ?? 1, r.Unit) is { } note) r.Warnings.Add(note);
+
         if (mode == "walls" && r.Unit == null)
             throw new InvalidOperationException("Não consegui deduzir a unidade (sem arcos de porta na região). Informe units: 'm', 'cm' ou 'mm'.");
-
-        // tolerância de fusão de vértices: 1 mm (ou um milésimo do tamanho, sem unidade)
-        double size = Math.Max(segs.Max(s => Math.Max(s.A.X, s.B.X)) - segs.Min(s => Math.Min(s.A.X, s.B.X)),
-                               segs.Max(s => Math.Max(s.A.Y, s.B.Y)) - segs.Min(s => Math.Min(s.A.Y, s.B.Y)));
-        double tol = uf > 0 ? 0.001 * uf : Math.Max(size * 1e-6, 1e-6);
-        var faces = new PlanarFaces(segs, tol, tags);
         r.Faces = faces.Bounded.Count;
 
         List<Point2d> seeds;
@@ -165,7 +218,24 @@ internal static class HatchRegions
                 if (ratio > maxT * 1.5)
                     found.Rejected = $"contorno largo demais para parede (≈{ratio / uf * 100:0} cm de largura média, área {f.Area / (uf * uf):0.##} m²): a parede deve estar ABERTA perto deste ponto e o contorno vazou para o ambiente";
             }
-            else found.Holes = faces.IslandsOf(f);
+            else
+            {
+                found.Holes = faces.IslandsOf(f);
+                // conferência: o texto de área do ambiente ("A= 4,80 m²") que cai dentro desta área
+                if (extra != null && uf > 0)
+                {
+                    var inside = extra.AreaTexts.Where(t => faces.FaceAt(t.Pos) == f).ToList();
+                    if (inside.Count == 1)
+                    {
+                        double calc = (f.Area - found.Holes.Sum(h => h.Area)) / (uf * uf);
+                        found.TextArea = inside[0].M2;
+                        if (Math.Abs(calc - inside[0].M2) > Math.Max(0.15, 0.05 * inside[0].M2))
+                            r.Warnings.Add($"Área {found.Index}: calculei {calc:0.##} m², mas o texto do ambiente diz \"{inside[0].Text}\". " +
+                                           (calc > inside[0].M2 ? "O contorno deve ter saído por um vão sem porta (passagem, porta de correr): feche o vão com uma linha e rode de novo." :
+                                                                  "O contorno pode estar cortado por alguma linha interna (bancada, divisória), ou o texto considera outra medida."));
+                    }
+                }
+            }
             r.Regions.Add(found);
         }
 
@@ -202,7 +272,21 @@ internal static class HatchRegions
     }
 
     /// <summary>Segmentos 2D da região (arcos e círculos viram cordas). 'straight' = só os retos (para achar paredes).</summary>
-    private static (List<(Point2d A, Point2d B)> All, List<(Point2d A, Point2d B)> Straight, List<double> Radii, List<int> Tags, List<string> Sources) Collect(Database db, JsonElement p, Extents3d? region)
+    private sealed class Extra
+    {
+        public double DoorMin, DoorMax;
+        public int Doors;
+        public readonly List<(Point2d Pos, double M2, string Text)> AreaTexts = new();
+    }
+
+    /// <summary>"A= 4,80 m²", "ÁREA: 12.5m2" → 4.80 / 12.5 (m²).</summary>
+    private static double? AreaValue(string s)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(s, @"(?:\bA|ÁREA|AREA)\s*[=:]\s*([0-9]+(?:[.,][0-9]+)?)\s*m", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        return m.Success && double.TryParse(m.Groups[1].Value.Replace(',', '.'), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double v) && v > 0 ? v : null;
+    }
+
+    private static (List<(Point2d A, Point2d B)> All, List<(Point2d A, Point2d B)> Straight, List<double> Radii, List<int> Tags, List<string> Sources) Collect(Database db, JsonElement p, Extents3d? region, Extra? extra = null)
     {
         var all = new List<(Point2d, Point2d)>();
         var tags = new List<int>();
@@ -226,6 +310,7 @@ internal static class HatchRegions
         }
         using Transaction tr = db.TransactionManager.StartOpenCloseTransaction();
         var opt = new GeometryReader.Options { Region = region, Types = new HashSet<string> { "LINE", "LWPOLYLINE", "ARC", "CIRCLE" } };
+        if (extra != null) { opt.Types.Add("TEXT"); opt.Types.Add("MTEXT"); }
         if (Json.StringArray(p, "layers") is { Length: > 0 } pats)
         {
             var rx = pats.Select(GeometryReader.WildcardToRegex).ToArray();
@@ -250,9 +335,25 @@ internal static class HatchRegions
                     // pelas pontas, não por StartAngle/EndAngle: num bloco espelhado a normal vira -Z e os ângulos invertem
                     double s0 = Math.Atan2(a.StartPoint.Y - a.Center.Y, a.StartPoint.X - a.Center.X);
                     double s1 = Math.Atan2(a.EndPoint.Y - a.Center.Y, a.EndPoint.X - a.Center.X);
+                    double sweep = a.EndAngle - a.StartAngle; if (sweep <= 0) sweep += 2 * Math.PI;
+                    if (extra != null && a.Radius >= extra.DoorMin && a.Radius <= extra.DoorMax && Math.Abs(sweep - Math.PI / 2) < Math.PI / 9)
+                    {
+                        // Giro de porta: a porta conta como FECHADA. As linhas dobradiça→pontas fecham o vão (sem elas o
+                        // contorno do ambiente saía pelo vão e contornava o arco). O arco em si fica de fora.
+                        AddSeg((P(a.Center), P(a.StartPoint)));
+                        AddSeg((P(a.Center), P(a.EndPoint)));
+                        extra.Doors++;
+                        break;
+                    }
                     if (a.Normal.Z >= 0) Chords(a.Center, a.Radius, s0, s1); else Chords(a.Center, a.Radius, s1, s0);
                     break;
                 }
+                case DBText t when extra != null:
+                    if (AreaValue(t.TextString) is { } v1) extra.AreaTexts.Add((P(t.Position), v1, t.TextString.Trim()));
+                    break;
+                case MText m when extra != null:
+                    if (AreaValue(m.Text) is { } v2) extra.AreaTexts.Add((P(m.Location), v2, m.Text.Replace("\r", " ").Replace("\n", " ").Trim()));
+                    break;
                 case Circle c:
                     Chords(c.Center, c.Radius, 0, 2 * Math.PI);
                     break;
@@ -324,7 +425,10 @@ internal static class HatchRegions
         {
             action = dry ? "hatch_regions (dry_run: nada foi desenhado)" : "hatch_regions",
             mode = r.Mode,
-            units = r.Unit is { } uu ? new { unit = uu.Name, reason = uu.Reason } : null,
+            // a região efetiva: o modelo repete ESTA na execução (a seleção do usuário pode sumir entre as chamadas)
+            region = r.Region is { } rg ? new { min = new[] { GeometryReader.R(rg.MinPoint.X), GeometryReader.R(rg.MinPoint.Y) }, max = new[] { GeometryReader.R(rg.MaxPoint.X), GeometryReader.R(rg.MaxPoint.Y) } } : null,
+            region_source = r.Region != null ? r.RegionSource : null,
+            units =r.Unit is { } uu ? new { unit = uu.Name, reason = uu.Reason } : null,
             segments_read = r.Segments,
             closed_faces = r.Faces,
             seeds = r.Seeds,
@@ -332,12 +436,13 @@ internal static class HatchRegions
             regions_ok = ok.Count,
             total_area_m2 = a2 > 0 ? Math.Round(ok.Sum(f => f.Face.Area) / a2, 3) : (double?)null,
             // lista curta: o importante é a contagem, a área e o que foi REJEITADO
-            regions_sample = ok.Take(r.Mode == "points" ? 50 : 10).Select(f => new
+            regions_sample = (dry || r.Mode == "points" ? ok : ok.Take(0)).Take(r.Mode == "points" ? 50 : 10).Select(f => new
             {
                 index = f.Index,
                 area = Math.Round(f.Face.Area, 4),
                 area_m2 = a2 > 0 ? Math.Round(f.Face.Area / a2, 3) : (double?)null,
                 holes = f.Holes.Count > 0 ? f.Holes.Count : (int?)null,
+                text_area_m2 = f.TextArea,
                 box = Box(f.Face),
             }),
             regions_extent = ok.Count > 0 ? new
@@ -345,17 +450,18 @@ internal static class HatchRegions
                 min = new[] { GeometryReader.R(ok.Min(f => f.Face.Box.MinPoint.X)), GeometryReader.R(ok.Min(f => f.Face.Box.MinPoint.Y)) },
                 max = new[] { GeometryReader.R(ok.Max(f => f.Face.Box.MaxPoint.X)), GeometryReader.R(ok.Max(f => f.Face.Box.MaxPoint.Y)) },
             } : null,
-            rejected_nested_blocks = bad.Any(f => f.Nested)
+            rejected_nested_blocks = dry && bad.Any(f => f.Nested)
                 ? bad.Where(f => f.Nested).GroupBy(f => f.Rejected!).Select(g => new { count = g.Count(), reason = g.Key })
                 : null,
-            rejected_open = bad.Any(f => !f.Nested)
+            rejected_count = bad.Count > 0 ? bad.Count : (int?)null,
+            rejected_open = dry && bad.Any(f => !f.Nested)
                 ? bad.Where(f => !f.Nested).Take(20).Select(f => new { near = new[] { GeometryReader.R(f.Seed.X), GeometryReader.R(f.Seed.Y) }, reason = f.Rejected, box = Box(f.Face) })
                 : null,
             failed = r.Failed.Count > 0 ? r.Failed : null,
             warnings = r.Warnings.Count > 0 ? r.Warnings : null,
             drawn = drawn == null ? null : new { by_type = drawn.Counts, layers_created = drawn.CreatedLayers, bounds = drawn.Bounds },
             next = dry
-                ? "Diga ao usuário quantas áreas serão hachuradas e mostre as REJEITADAS (paredes abertas: ele pode fechar com uma linha e rodar de novo). Com o ok, chame sem dry_run (mesmos parâmetros + pattern/color/layer)."
+                ? "Diga ao usuário quantas áreas serão hachuradas e mostre as REJEITADAS (paredes abertas: ele pode fechar com uma linha e rodar de novo). Com o ok, chame sem dry_run com os mesmos parâmetros + pattern/color/layer, passando 'region' = a região acima no lugar de use_selection (a seleção do usuário pode ter mudado)."
                 : "Para desfazer: digite U no AutoCAD (desfaz todas as hachuras de uma vez). Confira com zoom_to + capture_view.",
         };
     }
