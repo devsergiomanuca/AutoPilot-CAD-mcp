@@ -134,6 +134,29 @@ internal sealed class Canvas
         return h;
     }
 
+    /// <summary>Hachura a partir de contornos prontos (ex.: os do TraceBoundary), com trechos curvos.</summary>
+    public Hatch HatchFromPolylines(Polyline outer, IEnumerable<Polyline> holes, string pattern, double scale, string layer, Color? c = null)
+    {
+        var h = new Hatch();
+        Add(h, layer, c);
+        h.SetHatchPattern(HatchPatternType.PreDefined, pattern.ToUpperInvariant());
+        if (!pattern.Equals("SOLID", StringComparison.OrdinalIgnoreCase)) h.PatternScale = scale > 0 ? scale : 1;
+        h.HatchStyle = HatchStyle.Normal;
+        AppendPolyLoop(h, outer, HatchLoopTypes.External | HatchLoopTypes.Polyline);
+        foreach (Polyline pl in holes) AppendPolyLoop(h, pl, HatchLoopTypes.Default | HatchLoopTypes.Polyline);
+        h.EvaluateHatch(true);
+        return h;
+    }
+
+    private static void AppendPolyLoop(Hatch h, Polyline pl, HatchLoopTypes type)
+    {
+        var pts = new Point2dCollection();
+        var bulges = new DoubleCollection();
+        for (int i = 0; i < pl.NumberOfVertices; i++) { pts.Add(pl.GetPoint2dAt(i)); bulges.Add(pl.GetBulgeAt(i)); }
+        if (!pts[0].IsEqualTo(pts[pts.Count - 1])) { pts.Add(pts[0]); bulges.Add(0); }
+        h.AppendLoop(type, pts, bulges);
+    }
+
     private static void AppendLoop(Hatch h, IReadOnlyList<Point2d> loop, HatchLoopTypes type)
     {
         var pts = new Point2dCollection(loop.ToArray());

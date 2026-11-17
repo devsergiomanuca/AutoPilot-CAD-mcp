@@ -26,6 +26,7 @@ internal static class DrawingEdits
         "create_layer", "update_layer", "move_selection_to_layer",
         "draw_entities", "generate_elevation",   // v0.4
         "edit_entities",                         // v0.5
+        "hatch_regions",                         // v0.5.1
     };
 
     public static object Run(Document doc, string method, JsonElement p) => method switch
@@ -36,6 +37,7 @@ internal static class DrawingEdits
         "draw_entities" => DrawEntities.Run(doc, p),
         "generate_elevation" => Elevation.Generate(doc, p),
         "edit_entities" => EntityEdits.Run(doc, p),
+        "hatch_regions" => HatchRegions.Run(doc, p),
         _ => throw new InvalidOperationException($"Método desconhecido: '{method}'."),
     };
 
@@ -51,6 +53,7 @@ internal static class DrawingEdits
         {
             "generate_elevation" => Elevation.DryRun(doc, p),
             "edit_entities" => EntityEdits.DryRun(doc, p),
+            "hatch_regions" => HatchRegions.DryRun(doc, p),
             _ => null,
         };
     }

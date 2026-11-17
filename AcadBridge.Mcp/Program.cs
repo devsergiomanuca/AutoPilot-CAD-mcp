@@ -111,7 +111,10 @@ internal static class Program
                 "generate_elevation com use_selection=true e dry_run=true, mostre o que foi detectado, corrija com o usuário e só " +
                 "então gere. Pergunte forro, rodapé e acabamentos (cores/revestimentos por trecho) e passe em ceiling_height, " +
                 "baseboard e finishes. Depois enquadre com zoom_to e confira com capture_view. " +
-                "EDITAR O QUE EXISTE: read_geometry dá o handle de cada objeto; edit_entities move/copia/gira/espelha/escala/" +
+                "HACHURAS: para hachurar paredes ou áreas use hatch_regions (contorno achado pelo AutoCAD); nunca monte o " +
+                "polígono à mão juntando linhas. Paredes: mode='walls' com region ou a seleção do usuário (um apartamento/" +
+                "trecho por vez). " +
+                "EDITAR O QUE EXISTE:read_geometry dá o handle de cada objeto; edit_entities move/copia/gira/espelha/escala/" +
                 "apaga/muda layer, cor e textos por handle. Sempre: dry_run=true → select_entities para o usuário ver quais " +
                 "objetos são → só com o ok dele, execute. Nunca apague nem altere o que o usuário não pediu. " +
                 "UNDO: zoom e pan também entram no histórico do AutoCAD. Se o usuário navegou depois da sua ação, o " +

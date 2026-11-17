@@ -430,7 +430,22 @@ internal static class ViewOps
         };
     }
 
-    private static void ZoomExtents(Document doc, Extents3d ext, double margin)
+    /// <summary>A região inteira aparece na tela atual? (TraceBoundary só enxerga o que está visível.)</summary>
+    internal static bool ViewContains(Document doc, Extents3d ext)
+    {
+        using ViewTableRecord view = doc.Editor.GetCurrentView();
+        Matrix3d dcs2wcs = Matrix3d.Rotation(-view.ViewTwist, view.ViewDirection, view.Target) *
+                           Matrix3d.Displacement(view.Target - Point3d.Origin) *
+                           Matrix3d.PlaneToWorld(view.ViewDirection);
+        Matrix3d wcs2dcs = dcs2wcs.Inverse();
+        Point3d a = new Point3d(ext.MinPoint.X, ext.MinPoint.Y, 0).TransformBy(wcs2dcs);
+        Point3d b = new Point3d(ext.MaxPoint.X, ext.MaxPoint.Y, 0).TransformBy(wcs2dcs);
+        double hw = view.Width / 2, hh = view.Height / 2;
+        bool In(Point3d q) => Math.Abs(q.X - view.CenterPoint.X) <= hw && Math.Abs(q.Y - view.CenterPoint.Y) <= hh;
+        return In(a) && In(b) && In(new Point3d(a.X, b.Y, 0)) && In(new Point3d(b.X, a.Y, 0));
+    }
+
+    internal static void ZoomExtents(Document doc, Extents3d ext, double margin)
     {
         if (!doc.Database.TileMode)
             throw new InvalidOperationException("O AutoCAD está numa aba de layout (folha). Peça ao usuário para ir para a aba Model e tente de novo.");

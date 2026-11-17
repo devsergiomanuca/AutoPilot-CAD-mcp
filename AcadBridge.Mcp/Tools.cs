@@ -16,6 +16,7 @@ internal static class Tools
         "create_layer", "update_layer", "move_selection_to_layer",
         "read_geometry", "draw_entities", "generate_elevation",   // v0.4
         "edit_entities", "select_entities", "zoom_to",             // v0.5
+        "hatch_regions",                                           // v0.5.1
     };
 
     public static JsonArray Definitions() => new()
@@ -239,6 +240,38 @@ internal static class Tools
                  ["dry_run"] = new JsonObject { ["type"] = "boolean", ["description"] = "Só valida e lista o que seria alterado (nada muda, sem undo). Use sempre primeiro." },
                  ["allow_xref"] = new JsonObject { ["type"] = "boolean", ["description"] = "Permite mover/apagar a INSERÇÃO de um XREF (a planta inteira). Só se o usuário pediu explicitamente." },
              }, Kind.Modifies, "operations"),
+
+        Tool("hatch_regions",
+             "ALTERA O DESENHO (só acrescenta hachuras), exceto com dry_run=true. Hachura áreas FECHADAS achando o contorno " +
+             "pelo algoritmo do próprio AutoCAD (como clicar dentro da área no comando HATCH) — NÃO monte polígonos de " +
+             "hachura à mão com draw_entities a partir de linhas soltas. Modos: 'walls' = hachura as PAREDES sozinho " +
+             "(acha pares de linhas paralelas com espessura de parede numa região ou na seleção do usuário, entra em " +
+             "blocos/XREFs, e REJEITA contornos que vazaram por parede aberta, dizendo onde); 'points' = um ponto DENTRO " +
+             "de cada área (ambiente, piso, peça). FLUXO: dry_run=true → diga quantas áreas e mostre as rejeitadas (o " +
+             "usuário pode fechar a parede com uma linha) → com o ok, chame sem dry_run. Um U desfaz todas as hachuras.",
+             new JsonObject
+             {
+                 ["mode"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("walls", "points"), ["description"] = "walls (padrão sem 'points') ou points." },
+                 ["points"] = new JsonObject { ["type"] = "array", ["items"] = Point2(), ["description"] = "Modo points: um ponto [x,y] dentro de cada área." },
+                 ["region"] = new JsonObject
+                 {
+                     ["type"] = "object",
+                     ["description"] = "Região de trabalho {min:[x,y], max:[x,y]} (obrigatória no modo walls, se não usar a seleção).",
+                     ["properties"] = new JsonObject { ["min"] = Point2(), ["max"] = Point2() },
+                     ["required"] = new JsonArray("min", "max"),
+                 },
+                 ["use_selection"] = new JsonObject { ["type"] = "boolean", ["description"] = "Usar a extensão dos objetos selecionados pelo usuário como região." },
+                 ["layers"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Modo walls: só linhas destas layers (curingas * ?), se as paredes tiverem layer própria." },
+                 ["min_thickness"] = new JsonObject { ["type"] = "number", ["description"] = "Modo walls: espessura mínima de parede em metros (padrão 0.07)." },
+                 ["max_thickness"] = new JsonObject { ["type"] = "number", ["description"] = "Modo walls: espessura máxima em metros (padrão 0.40)." },
+                 ["units"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("m", "cm", "mm"), ["description"] = "Unidade do desenho, se a dedução falhar." },
+                 ["include_nested"] = new JsonObject { ["type"] = "boolean", ["description"] = "Modo walls: hachurar também contornos de blocos DENTRO do bloco das paredes (por padrão são rejeitados: costumam ser janelas/portas/pilares)." },
+                 ["pattern"] = new JsonObject { ["type"] = "string", ["description"] = "Padrão: SOLID (padrão), ANSI31, AR-CONC..." },
+                 ["scale"] = new JsonObject { ["type"] = "number", ["description"] = "Escala do padrão (não vale para SOLID)." },
+                 ["color"] = new JsonObject { ["type"] = new JsonArray("string", "integer"), ["description"] = "Cor: ACI, 'R,G,B' ou nome." },
+                 ["layer"] = new JsonObject { ["type"] = "string", ["description"] = "Layer das hachuras (padrão 'IA-HACHURA'; criada se não existir)." },
+                 ["dry_run"] = new JsonObject { ["type"] = "boolean", ["description"] = "Só acha os contornos e informa (nada é desenhado). Use sempre primeiro." },
+             }, Kind.Additive),
 
         Tool("select_entities",
              "Seleciona (com grips) objetos do Model por handle no AutoCAD e, por padrão, dá zoom neles, para o usuário " +

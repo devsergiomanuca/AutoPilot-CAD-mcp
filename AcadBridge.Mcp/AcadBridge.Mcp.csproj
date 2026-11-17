@@ -9,6 +9,6 @@
     <AssemblyName>AcadBridge.Mcp</AssemblyName>
     <RootNamespace>AcadBridge.Mcp</RootNamespace>
     <InvariantGlobalization>true</InvariantGlobalization>
-    <Version>0.5.0</Version>
+    <Version>0.5.1</Version>
   </PropertyGroup>
 </Project>

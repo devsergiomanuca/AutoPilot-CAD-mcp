@@ -20,7 +20,9 @@ e numa recusa por "aba ativa diferente" pergunte ao usuário.
   `GeometryReader.cs` = percorre Model + blocos + XREFs em WCS (base de read_geometry e das vistas),
   unidade deduzida e leitura de JSON; `DrawingPrimitives.cs` = `Canvas` (pincel usado por toda escrita
   que desenha) e draw_entities; `Elevation.cs` = generate_elevation (análise geométrica + desenho);
-  `EntityEdits.cs` = edit_entities (edição por handle) e `ViewOps` (select_entities, zoom_to).
+  `EntityEdits.cs` = edit_entities (edição por handle) e `ViewOps` (select_entities, zoom_to);
+  `HatchRegions.cs` + `PlanarFaces.cs` = hatch_regions (faces fechadas calculadas da geometria; o
+  `Editor.TraceBoundary` do AutoCAD não enxerga blocos aninhados/espelhados).
 - `bundle/`: manifesto + `install-bundle.ps1`. `setup.ps1`: instalação completa.
 
 **Regras que não podem quebrar**
