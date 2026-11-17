@@ -77,7 +77,7 @@ O script decide a origem (`source=`):
   precisa de SDK.
 - **`build`**: só se o PC tiver .NET SDK ≥ 8; compila este código.
 
-Depois instala o bundle do AutoCAD e o servidor MCP, testa o MCP (`tools=14` esperado) e registra o
+Depois instala o bundle do AutoCAD e o servidor MCP, testa o MCP (`tools=17` esperado) e registra o
 servidor `acad-bridge` no agente. Espere `status=installed`.
 
 - `exit 2`: o AutoCAD foi aberto no meio. Peça para fechar e rode de novo.

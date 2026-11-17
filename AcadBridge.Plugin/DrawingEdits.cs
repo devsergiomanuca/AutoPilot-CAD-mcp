@@ -25,6 +25,7 @@ internal static class DrawingEdits
     {
         "create_layer", "update_layer", "move_selection_to_layer",
         "draw_entities", "generate_elevation",   // v0.4
+        "edit_entities",                         // v0.5
     };
 
     public static object Run(Document doc, string method, JsonElement p) => method switch
@@ -34,6 +35,7 @@ internal static class DrawingEdits
         "move_selection_to_layer" => MoveSelectionToLayer(doc, p),
         "draw_entities" => DrawEntities.Run(doc, p),
         "generate_elevation" => Elevation.Generate(doc, p),
+        "edit_entities" => EntityEdits.Run(doc, p),
         _ => throw new InvalidOperationException($"Método desconhecido: '{method}'."),
     };
 
@@ -42,11 +44,16 @@ internal static class DrawingEdits
     /// dry_run=true). Rodam pelo caminho de leitura: sem lock nomeado, sem passo de undo e liberadas mesmo
     /// no modo somente leitura. Devolve null = não é o caso.
     /// </summary>
-    public static object? ReadOnlyVariant(Document doc, string method, JsonElement p) =>
-        method == "generate_elevation" && p.ValueKind == JsonValueKind.Object && Has(p, "dry_run")
-        && p.GetProperty("dry_run").ValueKind == JsonValueKind.True
-            ? Elevation.DryRun(doc, p)
-            : null;
+    public static object? ReadOnlyVariant(Document doc, string method, JsonElement p)
+    {
+        if (p.ValueKind != JsonValueKind.Object || !Has(p, "dry_run") || p.GetProperty("dry_run").ValueKind != JsonValueKind.True) return null;
+        return method switch
+        {
+            "generate_elevation" => Elevation.DryRun(doc, p),
+            "edit_entities" => EntityEdits.DryRun(doc, p),
+            _ => null,
+        };
+    }
 
     /// <summary>
     /// update_layer que não mudaria nada: responde aqui, SEM abrir o lock nomeado — senão o AutoCAD

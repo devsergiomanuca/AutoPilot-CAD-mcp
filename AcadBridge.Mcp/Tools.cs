@@ -15,6 +15,7 @@ internal static class Tools
         "list_documents", "get_drawing_summary", "list_layers", "list_blocks", "get_selection", "capture_view",
         "create_layer", "update_layer", "move_selection_to_layer",
         "read_geometry", "draw_entities", "generate_elevation",   // v0.4
+        "edit_entities", "select_entities", "zoom_to",             // v0.5
     };
 
     public static JsonArray Definitions() => new()
@@ -214,6 +215,57 @@ internal static class Tools
                  ["title"] = new JsonObject { ["type"] = "string", ["description"] = "Título da vista (ex.: 'VISTA 7 - COZINHA')." },
                  ["layer_prefix"] = new JsonObject { ["type"] = "string", ["description"] = "Prefixo das layers criadas (padrão 'IA-VISTA')." },
              }, Kind.Additive),
+
+        // ---------------- v0.5: editar o que já existe ----------------
+        Tool("edit_entities",
+             "ALTERA O DESENHO (pode mudar e APAGAR objetos existentes), exceto com dry_run=true. Edita objetos do Model " +
+             "apontados por HANDLE (o read_geometry devolve o handle de cada item). Lote de operações aplicadas em ordem: " +
+             "move {displacement:[dx,dy] ou from,to}, copy {displacement ou from,to, count}, rotate {base, angle em graus " +
+             "anti-horário}, scale {base, factor}, mirror {p1, p2, keep_original}, erase, set_props {layer, color}, " +
+             "set_text {text} (TEXT/MTEXT/cota), set_attributes {attributes:{TAG:valor}} (blocos). " +
+             "FLUXO OBRIGATÓRIO: 1) dry_run=true e mostre ao usuário a lista de objetos afetados (use select_entities para " +
+             "destacá-los na tela); 2) só com o ok dele, chame sem dry_run. Recusa objetos em layer travada, fora do Model " +
+             "ou dentro de blocos/XREFs (o handle de um item de XREF é a inserção do XREF inteiro: exige allow_xref). " +
+             "Coordenadas nas unidades do desenho. Um U desfaz o lote inteiro.",
+             new JsonObject
+             {
+                 ["operations"] = new JsonObject
+                 {
+                     ["type"] = "array", ["minItems"] = 1, ["maxItems"] = 200,
+                     ["description"] = "Lista de {action, handles:[...], ...parâmetros da ação}. Ex.: " +
+                                       "{action:'move', handles:['1B00D'], displacement:[0.5, 0]}.",
+                     ["items"] = new JsonObject { ["type"] = "object", ["required"] = new JsonArray("action", "handles") },
+                 },
+                 ["dry_run"] = new JsonObject { ["type"] = "boolean", ["description"] = "Só valida e lista o que seria alterado (nada muda, sem undo). Use sempre primeiro." },
+                 ["allow_xref"] = new JsonObject { ["type"] = "boolean", ["description"] = "Permite mover/apagar a INSERÇÃO de um XREF (a planta inteira). Só se o usuário pediu explicitamente." },
+             }, Kind.Modifies, "operations"),
+
+        Tool("select_entities",
+             "Seleciona (com grips) objetos do Model por handle no AutoCAD e, por padrão, dá zoom neles, para o usuário " +
+             "VER quais são antes de confirmar uma edição. Não altera o desenho (o zoom entra no histórico de undo, como " +
+             "qualquer zoom).",
+             new JsonObject
+             {
+                 ["handles"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Handles (do read_geometry)." },
+                 ["zoom"] = new JsonObject { ["type"] = "boolean", ["description"] = "Enquadrar os objetos (padrão true)." },
+                 ["margin"] = new JsonObject { ["type"] = "number", ["description"] = "Folga em fração do tamanho (padrão 0.15)." },
+             }, Kind.ReadOnly, "handles"),
+
+        Tool("zoom_to",
+             "Enquadra a tela do AutoCAD numa região (coordenadas do desenho) ou em objetos por handle. Use antes de " +
+             "capture_view para ver de perto o que leu ou desenhou. Não altera o desenho (o zoom entra no histórico de undo).",
+             new JsonObject
+             {
+                 ["region"] = new JsonObject
+                 {
+                     ["type"] = "object",
+                     ["description"] = "{min:[x,y], max:[x,y]}.",
+                     ["properties"] = new JsonObject { ["min"] = Point2(), ["max"] = Point2() },
+                     ["required"] = new JsonArray("min", "max"),
+                 },
+                 ["handles"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Alternativa à região: enquadrar estes objetos." },
+                 ["margin"] = new JsonObject { ["type"] = "number", ["description"] = "Folga em fração do tamanho (padrão 0.1)." },
+             }),
     };
 
     private static JsonObject Point2(string? description = null)

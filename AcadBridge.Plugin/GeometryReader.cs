@@ -289,7 +289,7 @@ internal static class GeometryReader
     private static string Pt(Point3d q) => $"{F(q.X)},{F(q.Y)}";
 
     /// <summary>Geometria em uma linha (formato compacto: ~4x menos tokens que o JSON detalhado).</summary>
-    private static string Compact(Entity e)
+    internal static string Compact(Entity e)
     {
         string Box() => TryExtents(e, Matrix3d.Identity, out Extents3d ex) ? $"box={Pt(ex.MinPoint)}..{Pt(ex.MaxPoint)}" : "";
         static string Q(string s) => "\"" + s.Replace("\r", "").Replace("\n", "\\n").Replace("\"", "'") + "\"";

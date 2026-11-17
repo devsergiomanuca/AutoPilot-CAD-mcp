@@ -230,6 +230,8 @@ internal sealed class BridgeServer : IDisposable
                                   (uint)Math.Clamp(GetInt(p, "width", 1280), 256, 2048),
                                   (uint)Math.Clamp(GetInt(p, "height", 800), 256, 2048)),
             "read_geometry" => GeometryReader.Read(doc, p),
+            "select_entities" => ViewOps.Select(doc, p),   // v0.5: não altera o desenho
+            "zoom_to" => ViewOps.Zoom(doc, p),
             _ => throw new InvalidOperationException($"Método desconhecido: '{method}'."),
         };
         return new Executed(result, where);

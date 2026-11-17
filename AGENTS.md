@@ -19,7 +19,8 @@ e numa recusa por "aba ativa diferente" pergunte ao usuário.
   `DrawingEdits.cs` = escrita; `DocumentRegistry.cs` = ids de desenho e recusa por aba errada;
   `GeometryReader.cs` = percorre Model + blocos + XREFs em WCS (base de read_geometry e das vistas),
   unidade deduzida e leitura de JSON; `DrawingPrimitives.cs` = `Canvas` (pincel usado por toda escrita
-  que desenha) e draw_entities; `Elevation.cs` = generate_elevation (análise geométrica + desenho).
+  que desenha) e draw_entities; `Elevation.cs` = generate_elevation (análise geométrica + desenho);
+  `EntityEdits.cs` = edit_entities (edição por handle) e `ViewOps` (select_entities, zoom_to).
 - `bundle/`: manifesto + `install-bundle.ps1`. `setup.ps1`: instalação completa.
 
 **Regras que não podem quebrar**
@@ -51,6 +52,8 @@ e numa recusa por "aba ativa diferente" pergunte ao usuário.
 10. Ferramenta que desenha a partir de análise: ofereça `dry_run` (pelo `ReadOnlyVariant`: sem undo,
     liberado em somente leitura) e devolva a **evidência** de cada decisão, para o usuário confirmar.
 11. Desenhe sempre **ao lado** do existente, em layers próprias (`IA-…`), nunca por cima.
+12. Editar o que **já existe** (`edit_entities`) só por handle, só no Model, nunca em layer travada nem dentro
+    de bloco/XREF; `dry_run` lista exatamente os objetos afetados antes.
 
 **Build e teste**
 ```powershell

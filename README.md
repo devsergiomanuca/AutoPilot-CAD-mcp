@@ -141,7 +141,7 @@ Implementação **à mão, sem SDK**, sobre o transporte stdio:
 | `initialize` | ecoa a `protocolVersion` pedida; `capabilities.tools`; `serverInfo`; `instructions`: regras de uso para o modelo (consultar antes de alterar, avisar o que mudou, 1 chamada = 1 undo, o que fazer numa recusa) |
 | `notifications/initialized` | notificação, sem resposta |
 | `ping` | `{}` |
-| `tools/list` | 14 ferramentas com `inputSchema` (JSON Schema, `additionalProperties: false`) e `annotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) |
+| `tools/list` | 17 ferramentas com `inputSchema` (JSON Schema, `additionalProperties: false`) e `annotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) |
 | `tools/call` | `content` com `text` (JSON indentado) ou `image` (PNG base64) |
 
 Regras do protocolo seguidas no código:
@@ -214,6 +214,9 @@ Autodesk App Store. O AutoCAD lê o `PackageContents.xml` na abertura (`SeriesMi
 | `read_geometry` | leitura | geometria em coordenadas reais, **entrando em blocos e XREFs**: linhas, polilinhas, arcos, textos, cotas, hachuras, com o handle de cada objeto; saída compacta (uma linha por objeto); filtros por região, seleção, layers e tipos; palpite de unidade |
 | `draw_entities` | **altera** (acrescenta) | lote de linha, polilinha, retângulo, círculo, arco, texto, mtexto, cota, hachura e bloco (com atributos) num único undo; valida tudo antes |
 | `generate_elevation` | **altera** (acrescenta); `dry_run` só lê | vista de uma parede a partir da planta: vãos pela geometria (arco de porta, linhas de janela), pé-direito do rótulo "P.D.", paredes laterais em corte, forro, rodapé, acabamentos com chamada, cotas e título |
+| `edit_entities` | **altera** (pode apagar); `dry_run` só lê | edita objetos existentes por handle, em lote: mover, copiar, girar, escalar, espelhar, apagar, trocar layer/cor, texto e atributos; recusa layers travadas e conteúdo de blocos/XREFs |
+| `select_entities` | leitura (só seleciona) | seleciona e enquadra objetos por handle para o usuário conferir antes de uma edição |
+| `zoom_to` | leitura (só navega) | enquadra uma região ou objetos, para a IA conferir com `capture_view` |
 
 ---
 
