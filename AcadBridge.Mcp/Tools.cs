@@ -120,7 +120,9 @@ internal static class Tools
              "ou num bloco 'PAVIMENTO') e devolve coordenadas reais (WCS): linhas, polilinhas (pontos), arcos, círculos, " +
              "textos, cotas, hachuras, com layer efetiva e origem (xref:/block:). Filtre por região, seleção, layers e tipos. " +
              "ATENÇÃO: em desenhos reais nomes de layers/blocos podem enganar (paredes na layer 0, porta num bloco 'cadeira'): " +
-             "interprete pela geometria. Traz também um palpite de unidade (o INSUNITS do arquivo costuma estar errado).",
+             "interprete pela geometria. Traz também um palpite de unidade (o INSUNITS do arquivo costuma estar errado). " +
+             "Saída compacta por padrão (uma linha por objeto, com o handle do objeto do Model; legenda no resultado). " +
+             "Comece filtrando por region e types: desenhos reais têm milhares de objetos.",
              new JsonObject
              {
                  ["region"] = new JsonObject
@@ -136,6 +138,7 @@ internal static class Tools
                  ["include_blocks"] = new JsonObject { ["type"] = "boolean", ["description"] = "Entrar em blocos e XREFs (padrão true)." },
                  ["include_hidden"] = new JsonObject { ["type"] = "boolean", ["description"] = "Incluir layers desligadas/congeladas (padrão false)." },
                  ["max_items"] = new JsonObject { ["type"] = "integer", ["minimum"] = 1, ["maximum"] = 3000, ["description"] = "Máximo de itens detalhados (padrão 300). As contagens cobrem tudo." },
+                 ["format"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("compact", "full"), ["description"] = "compact (padrão, uma linha por objeto, ~4x menos texto) ou full (JSON detalhado por objeto)." },
              }),
 
         Tool("draw_entities",
@@ -160,7 +163,8 @@ internal static class Tools
 
         Tool("generate_elevation",
              "ALTERA O DESENHO (só acrescenta), exceto com dry_run=true. Gera a VISTA (elevação) de uma parede a partir da " +
-             "planta: contorno com pé-direito, portas, janelas e vãos, cotas e título, ao lado da planta em layers IA-VISTA*. " +
+             "planta: contorno com pé-direito, portas, janelas e vãos, paredes laterais em corte, forro, rodapé, acabamentos " +
+             "(pintura/revestimento com chamada), cotas e título, ao lado da planta em layers IA-VISTA*. " +
              "Entrada: uma linha sobre a FACE da parede, da ESQUERDA para a DIREITA de quem olha a parede de dentro do " +
              "ambiente — o usuário desenha essa linha (com OSNAP nos cantos) e a deixa selecionada (use_selection=true), " +
              "ou você passa wall_line. Paredes e vãos são reconhecidos pela geometria (entra em XREFs/blocos); o pé-direito " +
@@ -193,6 +197,20 @@ internal static class Tools
                      ["items"] = new JsonObject { ["type"] = "object", ["required"] = new JsonArray("index") },
                  },
                  ["origin"] = Point2("Onde desenhar a vista (canto inferior esquerdo, coordenadas do desenho). Padrão: abaixo de tudo o que existe."),
+                 ["ceiling_height"] = new JsonObject { ["type"] = "number", ["description"] = "Altura do FORRO em metros, se houver forro abaixo da laje (ex.: 2.46). 'height' continua sendo a laje/pé-direito estrutural." },
+                 ["ceiling_thickness"] = new JsonObject { ["type"] = "number", ["description"] = "Espessura do forro em metros (padrão 0.02)." },
+                 ["baseboard"] = new JsonObject { ["type"] = "number", ["description"] = "Altura do rodapé em metros (ex.: 0.07). Omitido = sem rodapé." },
+                 ["side_walls"] = new JsonObject { ["type"] = "boolean", ["description"] = "Desenhar as paredes laterais em corte, hachuradas (padrão true)." },
+                 ["side_wall_thickness"] = new JsonObject { ["type"] = "number", ["description"] = "Espessura das paredes laterais em metros (padrão: a da parede analisada)." },
+                 ["finishes"] = new JsonObject
+                 {
+                     ["type"] = "array",
+                     ["description"] = "Acabamentos (pintura, revestimento, painel) como áreas na parede, hachuradas e com chamada de texto: " +
+                                       "[{label: 'Tinta acrílica cor X | acetinado', from, to (m ao longo da parede, padrão 0..comprimento), " +
+                                       "bottom, top (m do piso, padrão rodapé..forro), color (ACI, 'R,G,B' ou nome), pattern (padrão SOLID)}]. " +
+                                       "Portas e janelas viram furos na hachura. Os limites entram nas cotas.",
+                     ["items"] = new JsonObject { ["type"] = "object" },
+                 },
                  ["title"] = new JsonObject { ["type"] = "string", ["description"] = "Título da vista (ex.: 'VISTA 7 - COZINHA')." },
                  ["layer_prefix"] = new JsonObject { ["type"] = "string", ["description"] = "Prefixo das layers criadas (padrão 'IA-VISTA')." },
              }, Kind.Additive),

@@ -48,8 +48,26 @@ internal static class Elevation
         public string? Label;
     }
 
+    /// <summary>Área de acabamento (pintura, revestimento, painel) no plano da parede, com chamada de texto.</summary>
+    private sealed class Finish
+    {
+        public int Index;
+        public string Label = "";
+        public double From, To, Bottom, Top;   // unidades do desenho
+        public Autodesk.AutoCAD.Colors.Color? Color;
+        public string Pattern = "SOLID";
+        public double Scale = 1;
+    }
+
     private sealed class Analysis
     {
+        public double? Ceiling;        // forro (unidades); null = sem forro
+        public double CeilingT;
+        public double? Baseboard;      // rodapé (unidades)
+        public bool SideWalls = true;  // paredes laterais em corte
+        public double SideT;
+        public readonly List<Finish> Finishes = new();
+        public double Top => Ceiling ?? H;   // até onde a parede é vista
         public Point3d Start, End;
         public double L;
         public Vector3d U, W;          // U = ao longo da parede; W = para dentro da parede (oposto ao ambiente)
@@ -90,16 +108,56 @@ internal static class Elevation
         using Transaction tr = db.TransactionManager.StartTransaction();
         var c = new Canvas(db, tr);
         string lWall = prefix, lOpen = prefix + "-ESQUADRIAS", lDim = prefix + "-COTAS", lTxt = prefix + "-TEXTOS";
+        string lCut = prefix + "-CORTE", lFin = prefix + "-ACABAMENTOS";
         c.Layer(lWall, 7); c.Layer(lOpen, 4); c.Layer(lDim, 1); c.Layer(lTxt, 2);
 
         double uf = a.Unit.PerMeter;
         double txt = TextHeight(db, a.H);
         Point3d W(double x, double y) => new(origin.X + x, origin.Y + y, 0);
         Point2d W2(double x, double y) => new(origin.X + x, origin.Y + y);
+        Point2d[] RectPts(double x0, double y0, double x1, double y1) => new[] { W2(x0, y0), W2(x1, y0), W2(x1, y1), W2(x0, y1) };
+        double sideT = a.SideWalls ? a.SideT : 0;
+        double cutScale = 0.01 * uf;   // ANSI31 com ~3 cm entre linhas, em qualquer unidade
 
-        // contorno da parede + linha de piso
+        // acabamentos primeiro: hachuras criadas antes ficam por baixo das linhas
+        if (a.Finishes.Count > 0) c.Layer(lFin, 8);
+        foreach (Finish f in a.Finishes)
+            c.Hatch(RectPts(f.From, f.Bottom, f.To, f.Top), f.Pattern, f.Pattern == "SOLID" ? 1 : f.Scale * cutScale * 10, lFin, f.Color,
+                    Holes(a, f, W2).Select(h => (IReadOnlyList<Point2d>)h));
+
+        // contorno da parede (até a laje) + linha de piso
         c.Rect(W2(0, 0), W2(a.L, a.H), lWall);
-        c.Line(W(-0.3 * uf, 0), W(a.L + 0.3 * uf, 0), lWall);
+        c.Line(W(-sideT - 0.3 * uf, 0), W(a.L + sideT + 0.3 * uf, 0), lWall);
+
+        // paredes laterais em corte (convenção de vista interna) e forro em corte
+        if (a.SideWalls || a.Ceiling != null) c.Layer(lCut, 8);
+        if (a.SideWalls)
+        {
+            foreach ((double x0, double x1) in new[] { (-sideT, 0.0), (a.L, a.L + sideT) })
+            {
+                c.Rect(W2(x0, 0), W2(x1, a.H), lCut);
+                c.Hatch(RectPts(x0, 0, x1, a.H), "ANSI31", cutScale, lCut);
+            }
+        }
+        if (a.Ceiling is { } ceil)
+        {
+            double t = Math.Min(a.CeilingT, a.H - ceil);
+            c.Rect(W2(0, ceil), W2(a.L, ceil + t), lCut);
+            if (t > 1e-9) c.Hatch(RectPts(0, ceil, a.L, ceil + t), "SOLID", 1, lCut);
+            c.Text(W(a.L / 2, ceil + t + txt * 0.4), "FORRO", txt * 0.7, 0, lTxt, "center");
+        }
+
+        // rodapé: só onde há parede até o piso (portas e vãos interrompem)
+        if (a.Baseboard is { } bbh)
+        {
+            double cur = 0;
+            foreach (Opening o in a.Openings.Where(o => o.Bottom < bbh).OrderBy(o => o.From))
+            {
+                if (o.From - cur > 1e-6) c.Line(W(cur, bbh), W(o.From, bbh), lWall);
+                cur = Math.Max(cur, o.To);
+            }
+            if (a.L - cur > 1e-6) c.Line(W(cur, bbh), W(a.L, bbh), lWall);
+        }
 
         // aberturas
         foreach (Opening o in a.Openings)
@@ -113,20 +171,43 @@ internal static class Elevation
             c.Text(W((o.From + o.To) / 2, o.Top + txt * 0.6), o.Label ?? Short(o), txt * 0.8, 0, lTxt, "center");
         }
 
-        // cotas: corrente horizontal, total, pé-direito e alturas das aberturas
+        // cotas horizontais: corrente (aberturas + limites dos acabamentos) e total
         double off = txt * 4;
         var xs = new SortedSet<double> { 0, a.L };
         foreach (Opening o in a.Openings) { xs.Add(o.From); xs.Add(o.To); }
-        double[] xa = xs.ToArray();
-        for (int i = 0; i + 1 < xa.Length; i++)
-            if (xa[i + 1] - xa[i] > 1e-6) c.Dim(W(xa[i], 0), W(xa[i + 1], 0), W(xa[i], -off), 0, lDim);
+        foreach (Finish f in a.Finishes) { xs.Add(f.From); xs.Add(f.To); }
+        double[] xa = Dedup(xs, 0.005 * uf);
+        for (int i = 0; i + 1 < xa.Length; i++) c.Dim(W(xa[i], 0), W(xa[i + 1], 0), W(xa[i], -off), 0, lDim);
         if (xa.Length > 2) c.Dim(W(0, 0), W(a.L, 0), W(0, -2 * off), 0, lDim);
-        c.Dim(W(0, 0), W(0, a.H), W(-off, 0), Math.PI / 2, lDim);
+
+        // cotas verticais à direita: corrente (acabamentos, forro) e total até a laje
+        var zs = new SortedSet<double> { 0, a.H };
+        if (a.Ceiling is { } cz) zs.Add(cz);
+        foreach (Finish f in a.Finishes) { zs.Add(f.Bottom); zs.Add(f.Top); }
+        double[] za = Dedup(zs, 0.005 * uf);
+        double xr = a.L + sideT + off;
+        for (int i = 0; i + 1 < za.Length; i++) c.Dim(W(a.L + sideT, za[i]), W(a.L + sideT, za[i + 1]), W(xr, za[i]), Math.PI / 2, lDim);
+        if (za.Length > 2) c.Dim(W(a.L + sideT, 0), W(a.L + sideT, a.H), W(xr + off, 0), Math.PI / 2, lDim);
+
+        // alturas das aberturas, junto de cada uma
         foreach (Opening o in a.Openings)
         {
             double x = o.To + off * 0.6;
             if (o.Bottom > 1e-6) c.Dim(W(o.To, 0), W(o.To, o.Bottom), W(x, 0), Math.PI / 2, lDim);
             c.Dim(W(o.To, o.Bottom), W(o.To, o.Top), W(x, o.Bottom), Math.PI / 2, lDim);
+        }
+
+        // chamadas dos acabamentos: texto à direita das cotas, empilhado de cima para baixo sem sobrepor
+        double tx = xr + (za.Length > 2 ? 2 : 1) * off;
+        double nextY = double.MaxValue;
+        foreach (Finish f in a.Finishes.Where(f => f.Label.Length > 0).OrderByDescending(f => (f.Bottom + f.Top) / 2))
+        {
+            (double px, double py) = LeaderPoint(a, f);
+            int lines = 1 + f.Label.Count(ch2 => ch2 == '\n') + f.Label.Length / 40;
+            double ty = Math.Min(py, nextY);
+            c.Leader(new[] { W(px, py), W(tx - txt * 0.5, ty) }, lTxt);
+            c.MText(W(tx, ty), f.Label.Replace("\n", "\\P"), txt * 0.8, lTxt, AttachmentPoint.MiddleLeft, txt * 25);
+            nextY = ty - txt * (1.6 * lines + 1.2);
         }
 
         // título
@@ -345,12 +426,90 @@ internal static class Elevation
             a.HeightSource = src;
         }
         if (a.H <= 0 || a.H > 30 * uf) throw new InvalidOperationException($"Pé-direito fora do razoável: {a.H / uf:0.##} m.");
+
+        // 8) forro, rodapé e paredes laterais em corte
+        if (Json.Num(p, "ceiling_height") is { } ch)
+        {
+            if (ch <= 0) throw new InvalidOperationException("ceiling_height (forro) deve ser > 0.");
+            if (ch * uf > a.H + 1e-9)
+                throw new InvalidOperationException($"O forro ({ch:0.##} m) está acima do pé-direito ({a.H / uf:0.##} m). Confira os dois com o usuário (height = laje, ceiling_height = forro).");
+            if (ch * uf < a.H - 1e-6) a.Ceiling = ch * uf;
+        }
+        a.CeilingT = (Json.Num(p, "ceiling_thickness") ?? 0.02) * uf;
+        if (a.CeilingT <= 0 || a.CeilingT > 0.5 * uf) throw new InvalidOperationException("ceiling_thickness deve estar entre 0 e 0,5 m.");
+        if (Json.Num(p, "baseboard") is { } bb)
+        {
+            if (bb <= 0 || bb > 0.5) throw new InvalidOperationException("baseboard (rodapé) deve estar entre 0 e 0,5 m.");
+            a.Baseboard = bb * uf;
+        }
+        a.SideWalls = Json.Bool(p, "side_walls") ?? true;
+        a.SideT = Json.Num(p, "side_wall_thickness") is { } st ? st * uf : a.Thickness;
+        if (a.SideT <= 0 || a.SideT > 1 * uf) throw new InvalidOperationException("side_wall_thickness deve estar entre 0 e 1 m.");
+
         foreach (Opening o in a.Openings)
         {
-            if (o.Top > a.H) { o.Top = a.H; a.Warnings.Add($"A abertura {o.Index} passava do pé-direito; limitei ao teto."); }
+            if (o.Top > a.Top) { o.Top = a.Top; a.Warnings.Add($"A abertura {o.Index} passava do {(a.Ceiling != null ? "forro" : "pé-direito")}; limitei."); }
             if (o.Bottom >= o.Top) throw new InvalidOperationException($"Abertura {o.Index}: a base ({o.Bottom / uf:0.##} m) precisa ficar abaixo do topo ({o.Top / uf:0.##} m).");
         }
+
+        // 9) acabamentos: [{label, from, to, bottom, top, color, pattern, scale}] em metros a partir do início da parede e do piso
+        if (Json.Has(p, "finishes") && p.GetProperty("finishes").ValueKind == JsonValueKind.Array)
+        {
+            short[] palette = { 51, 31, 131, 171, 211, 91, 11, 151 };
+            int fi = 0;
+            foreach (JsonElement fe in p.GetProperty("finishes").EnumerateArray())
+            {
+                fi++;
+                string where = $"finishes[{fi}]";
+                var f = new Finish
+                {
+                    Index = fi,
+                    Label = (Json.Str(fe, "label") ?? "").Trim(),
+                    From = (Json.Num(fe, "from") ?? 0) * uf,
+                    To = Json.Num(fe, "to") is { } tv ? tv * uf : a.L,
+                    Bottom = Json.Num(fe, "bottom") is { } bv ? bv * uf : a.Baseboard ?? 0,
+                    Top = Json.Num(fe, "top") is { } tpv ? tpv * uf : a.Top,
+                    Pattern = (Json.Str(fe, "pattern") ?? "SOLID").Trim().ToUpperInvariant(),
+                    Scale = Json.Num(fe, "scale") ?? 1,
+                };
+                double eps = 0.005 * uf;
+                if (f.From < -eps || f.To > a.L + eps || f.To - f.From <= eps)
+                    throw new InvalidOperationException($"{where}: 'from' e 'to' devem estar entre 0 e {a.L / uf:0.###} m (comprimento da parede), com from < to.");
+                if (f.Bottom < -eps || f.Top > a.Top + eps || f.Top - f.Bottom <= eps)
+                    throw new InvalidOperationException($"{where}: 'bottom' e 'top' devem estar entre 0 e {a.Top / uf:0.###} m ({(a.Ceiling != null ? "forro" : "pé-direito")}), com bottom < top.");
+                f.From = Math.Max(0, f.From); f.To = Math.Min(a.L, f.To);
+                f.Bottom = Math.Max(0, f.Bottom); f.Top = Math.Min(a.Top, f.Top);
+                if (!Regex.IsMatch(f.Pattern, @"^[A-Z0-9_\-]+$")) throw new InvalidOperationException($"{where}: 'pattern' inválido ('{f.Pattern}'). Ex.: SOLID, ANSI31, AR-CONC.");
+                f.Color = Json.Has(fe, "color") ? DrawingEdits.ParseColor(fe.GetProperty("color"))
+                                                : Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, palette[(fi - 1) % palette.Length]);
+                a.Finishes.Add(f);
+            }
+        }
         return a;
+    }
+
+    /// <summary>Aberturas que cortam a área (para virar furo na hachura), já recortadas ao retângulo.</summary>
+    private static IEnumerable<Point2d[]> Holes(Analysis a, Finish f, Func<double, double, Point2d> w)
+    {
+        foreach (Opening o in a.Openings)
+        {
+            double x0 = Math.Max(f.From, o.From), x1 = Math.Min(f.To, o.To);
+            double y0 = Math.Max(f.Bottom, o.Bottom), y1 = Math.Min(f.Top, o.Top);
+            if (x1 - x0 <= 1e-9 || y1 - y0 <= 1e-9) continue;
+            yield return new[] { w(x0, y0), w(x1, y0), w(x1, y1), w(x0, y1) };
+        }
+    }
+
+    /// <summary>Ponto dentro da área e fora das aberturas, para a seta da chamada.</summary>
+    private static (double X, double Y) LeaderPoint(Analysis a, Finish f)
+    {
+        double y = (f.Bottom + f.Top) / 2;
+        foreach (double k in new[] { 0.5, 0.25, 0.75, 0.1, 0.9 })
+        {
+            double x = f.From + (f.To - f.From) * k;
+            if (!a.Openings.Any(o => x > o.From && x < o.To && y > o.Bottom && y < o.Top)) return (x, y);
+        }
+        return ((f.From + f.To) / 2, f.Top - (f.Top - f.Bottom) * 0.1);
     }
 
     private static (Point3d, Point3d, string) WallLine(Document doc, JsonElement p)
@@ -441,6 +600,14 @@ internal static class Elevation
             else res.Add(s);
         }
         return res;
+    }
+
+    /// <summary>Valores ordenados sem vizinhos quase iguais (evita cota de 0,3 mm entre duas bordas).</summary>
+    private static double[] Dedup(IEnumerable<double> sorted, double tol)
+    {
+        var res = new List<double>();
+        foreach (double v in sorted) if (res.Count == 0 || v - res[^1] > tol) res.Add(v);
+        return res.ToArray();
     }
 
     private static double Overlap(double a1, double b1, double a2, double b2) => Math.Max(0, Math.Min(b1, b2) - Math.Max(a1, a2));
@@ -539,6 +706,15 @@ internal static class Elevation
                 bottom_m = Mt(o.Bottom), top_m = Mt(o.Top),
                 evidence = o.Evidence,
             }),
+            ceiling_m = a.Ceiling is { } cm ? Mt(cm) : (double?)null,
+            baseboard_m = a.Baseboard is { } bm ? Mt(bm) : (double?)null,
+            side_walls_cut = a.SideWalls ? new { thickness_m = Mt(a.SideT) } : null,
+            finishes = a.Finishes.Select(f => new
+            {
+                index = f.Index, label = f.Label,
+                from_m = Mt(f.From), to_m = Mt(f.To), bottom_m = Mt(f.Bottom), top_m = Mt(f.Top),
+                pattern = f.Pattern, color = f.Color?.ColorNameForDisplay,
+            }),
             warnings = a.Warnings,
             drawn = drawn == null ? null : new
             {
@@ -549,7 +725,9 @@ internal static class Elevation
             },
             next = drawn == null
                 ? "Mostre ao usuário as aberturas, o pé-direito e as alturas. Corrija com 'openings' [{index, kind, sill, head, label}] " +
-                  "e/ou 'height'; depois chame de novo sem dry_run para desenhar."
+                  "e/ou 'height'. Pergunte também (se ele ainda não disse): forro (ceiling_height), rodapé (baseboard) e os " +
+                  "acabamentos de cada trecho da parede (finishes: label, from/to, bottom/top em m, color). Depois chame de novo " +
+                  "sem dry_run para desenhar."
                 : "Para desfazer: digite U no AutoCAD (desfaz a vista inteira de uma vez). Use capture_view para conferir.",
         };
     }

@@ -83,8 +83,12 @@ Com o AutoCAD aberto, peça em linguagem natural:
 3. A IA mostra antes o que encontrou: comprimento, pé-direito (lido do rótulo "P.D." do ambiente),
    portas, janelas e vãos com larguras e alturas. Corrija o que precisar ("a abertura 2 é janela com
    peitoril 0,90").
-4. Ela desenha contorno, aberturas, cotas e título **ao lado da planta**, em layers `IA-VISTA*`.
-   Depois você pode pedir os acabamentos ("pinta até 1,10 m de verde-musgo, o resto branco gelo").
+4. Diga também, se houver: altura do **forro**, **rodapé** e os **acabamentos** de cada trecho ("da
+   esquerda até 0,67 m, cor de destaque até o forro; o resto branco gelo até 2,10 e verde-musgo até o
+   forro").
+5. Ela desenha **ao lado da planta**, em layers `IA-VISTA*`: contorno, paredes laterais em corte, forro,
+   rodapé, aberturas, acabamentos hachurados com chamada de texto, cotas (larguras embaixo, alturas à
+   direita) e título.
 
 Paredes, portas e janelas são reconhecidas **pela geometria**, então funciona mesmo com paredes na
 layer 0, portas em blocos com nomes genéricos ou a planta dentro de um XREF. A unidade (m, cm, mm) é
@@ -207,9 +211,9 @@ Autodesk App Store. O AutoCAD lê o `PackageContents.xml` na abertura (`SeriesMi
 | `create_layer` | **altera** (acrescenta) | cor (ACI, RGB ou nome), tipo de linha (carrega de `acadiso.lin`), espessura, plotável, descrição, tornar atual |
 | `update_layer` | **altera** | só o que for informado; devolve **de → para**; pedido sem mudança não grava undo |
 | `move_selection_to_layer` | **altera** | move a seleção; pula layers travadas e avisa |
-| `read_geometry` | leitura | geometria em coordenadas reais, **entrando em blocos e XREFs**: linhas, polilinhas, arcos, textos, cotas, hachuras; filtros por região, seleção, layers e tipos; palpite de unidade |
+| `read_geometry` | leitura | geometria em coordenadas reais, **entrando em blocos e XREFs**: linhas, polilinhas, arcos, textos, cotas, hachuras, com o handle de cada objeto; saída compacta (uma linha por objeto); filtros por região, seleção, layers e tipos; palpite de unidade |
 | `draw_entities` | **altera** (acrescenta) | lote de linha, polilinha, retângulo, círculo, arco, texto, mtexto, cota, hachura e bloco (com atributos) num único undo; valida tudo antes |
-| `generate_elevation` | **altera** (acrescenta); `dry_run` só lê | vista de uma parede a partir da planta: vãos pela geometria (arco de porta, linhas de janela), pé-direito do rótulo "P.D.", cotas e título |
+| `generate_elevation` | **altera** (acrescenta); `dry_run` só lê | vista de uma parede a partir da planta: vãos pela geometria (arco de porta, linhas de janela), pé-direito do rótulo "P.D.", paredes laterais em corte, forro, rodapé, acabamentos com chamada, cotas e título |
 
 ---
 
@@ -236,8 +240,9 @@ Autodesk App Store. O AutoCAD lê o `PackageContents.xml` na abertura (`SeriesMi
 - `list_layers` com contagem abre todas as entidades: pode demorar em desenhos enormes
   (`include_counts: false`).
 - `generate_elevation` faz uma parede reta por vez e devolve uma **base**: portas com 2,10 m e
-  janelas com peitoril 1,10 e topo 2,10 por padrão (ajustáveis). Ainda não desenha marcenaria,
-  revestimentos nem paredes inclinadas ou curvas. Mostre o `dry_run` ao usuário antes de desenhar.
+  janelas com peitoril 1,10 e topo 2,10 por padrão (ajustáveis). Acabamentos são retângulos na
+  parede (sem recortes livres). Ainda não desenha marcenaria, tomadas,
+  paredes inclinadas ou curvas. Mostre o `dry_run` ao usuário antes de desenhar.
 
 ---
 

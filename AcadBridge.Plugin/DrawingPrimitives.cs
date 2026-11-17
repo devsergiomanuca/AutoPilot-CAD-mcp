@@ -114,17 +114,36 @@ internal sealed class Canvas
         return Add(d, layer);
     }
 
-    public Hatch Hatch(IReadOnlyList<Point2d> boundary, string pattern, double scale, string layer, Color? c = null)
+    /// <summary>Hachura com contorno externo e, opcionalmente, furos (ex.: portas e janelas dentro de uma pintura).</summary>
+    public Hatch Hatch(IReadOnlyList<Point2d> boundary, string pattern, double scale, string layer, Color? c = null,
+                       IEnumerable<IReadOnlyList<Point2d>>? holes = null)
     {
         var h = new Hatch();
         Add(h, layer, c);   // a hachura precisa estar no banco antes de receber o contorno
-        h.SetHatchPattern(pattern.Equals("SOLID", StringComparison.OrdinalIgnoreCase) ? HatchPatternType.PreDefined : HatchPatternType.PreDefined, pattern.ToUpperInvariant());
+        h.SetHatchPattern(HatchPatternType.PreDefined, pattern.ToUpperInvariant());
         if (!pattern.Equals("SOLID", StringComparison.OrdinalIgnoreCase)) h.PatternScale = scale > 0 ? scale : 1;
-        var pts = new Point2dCollection(boundary.ToArray());
-        if (!boundary[0].IsEqualTo(boundary[^1])) pts.Add(boundary[0]);
-        h.AppendLoop(HatchLoopTypes.External, pts, new DoubleCollection(Enumerable.Repeat(0.0, pts.Count).ToArray()));
+        h.HatchStyle = HatchStyle.Normal;   // laços internos viram furos
+        AppendLoop(h, boundary, HatchLoopTypes.External);
+        if (holes != null) foreach (IReadOnlyList<Point2d> hole in holes) AppendLoop(h, hole, HatchLoopTypes.Default);
         h.EvaluateHatch(true);
         return h;
+    }
+
+    private static void AppendLoop(Hatch h, IReadOnlyList<Point2d> loop, HatchLoopTypes type)
+    {
+        var pts = new Point2dCollection(loop.ToArray());
+        if (!loop[0].IsEqualTo(loop[^1])) pts.Add(loop[0]);
+        h.AppendLoop(type, pts, new DoubleCollection(Enumerable.Repeat(0.0, pts.Count).ToArray()));
+    }
+
+    /// <summary>Chamada (leader) com seta no primeiro ponto, no estilo de cota atual.</summary>
+    public Leader Leader(IReadOnlyList<Point3d> pts, string layer)
+    {
+        var ld = new Leader();
+        ld.SetDatabaseDefaults(_db);
+        foreach (Point3d q in pts) ld.AppendVertex(q);
+        ld.HasArrowHead = true;
+        return Add(ld, layer);
     }
 
     public BlockReference Block(string name, Point3d pos, double scale, double rotation, IReadOnlyDictionary<string, string>? attrs, string layer)

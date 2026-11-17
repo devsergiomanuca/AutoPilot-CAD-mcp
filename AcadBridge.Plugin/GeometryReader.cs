@@ -34,6 +34,7 @@ internal static class GeometryReader
         public bool Owned;              // true = cópia nossa: precisa de Dispose
         public string Layer = "";       // layer efetiva ("0" dentro de bloco herda a da inserção; XREF vira "xref|layer")
         public string Source = "";      // caminho: "" (Model) | "xref:BASE/" | "block:PAVIMENTO/"...
+        public string Handle = "";      // handle do objeto do Model (ou da inserção que o contém): é o que se edita
     }
 
     internal sealed class Stats
@@ -65,19 +66,20 @@ internal static class GeometryReader
         var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
         var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForRead);
         IEnumerable<ObjectId> ids = opt.Only ?? ms.Cast<ObjectId>();
-        WalkIds(db, tr, tr, ids, Matrix3d.Identity, null, "", null, 0, opt, visit, stats, hostLayers);
+        WalkIds(db, tr, tr, ids, Matrix3d.Identity, null, "", null, 0, opt, visit, stats, hostLayers, null);
         return stats;
     }
 
     private static bool WalkIds(Database hostDb, Transaction hostTr, Transaction tr, IEnumerable<ObjectId> ids, Matrix3d xf, string? parentLayer,
                                 string source, string? xrefName, int depth, Options opt, Func<Item, bool> visit,
-                                Stats stats, Dictionary<string, bool> hostLayers)
+                                Stats stats, Dictionary<string, bool> hostLayers, string? top)
     {
         foreach (ObjectId id in ids)
         {
             if (stats.Visited >= MaxVisited) { stats.Truncated = true; return false; }
             if (tr.GetObject(id, OpenMode.ForRead) is not Entity ent || !ent.Visible) continue;
             stats.Visited++;
+            string handle = top ?? ent.Handle.ToString();
 
             // Layer efetiva: entidade na layer "0" dentro de bloco aparece na layer da inserção.
             // Entidades de um XREF anexado já trazem a layer como "XREF|layer"; só prefixa se não vier assim.
@@ -103,27 +105,27 @@ internal static class GeometryReader
                     var xbt = (BlockTable)xtr.GetObject(xdb.BlockTableId, OpenMode.ForRead);
                     var xms = (BlockTableRecord)xtr.GetObject(xbt[BlockTableRecord.ModelSpace], OpenMode.ForRead);
                     // Layers do XREF: a visibilidade vale pelas "xref|layer" do desenho hospedeiro (abrir com o tr do host).
-                    if (!WalkIds(hostDb, hostTr, xtr, xms.Cast<ObjectId>(), m, layer, $"{source}xref:{btr.Name}/", btr.Name, depth + 1, opt, visit, stats, hostLayers))
+                    if (!WalkIds(hostDb, hostTr, xtr, xms.Cast<ObjectId>(), m, layer, $"{source}xref:{btr.Name}/", btr.Name, depth + 1, opt, visit, stats, hostLayers, handle))
                         return false;
                 }
                 else
                 {
                     stats.Expanded[$"block:{name}"] = stats.Expanded.GetValueOrDefault($"block:{name}") + 1;
-                    if (!WalkIds(hostDb, hostTr, tr, btr.Cast<ObjectId>(), m, layer, $"{source}block:{name}/", xrefName, depth + 1, opt, visit, stats, hostLayers))
+                    if (!WalkIds(hostDb, hostTr, tr, btr.Cast<ObjectId>(), m, layer, $"{source}block:{name}/", xrefName, depth + 1, opt, visit, stats, hostLayers, handle))
                         return false;
                     // Atributos são entidades da inserção, não da definição.
                     foreach (ObjectId aid in br.AttributeCollection)
-                        if (!VisitOne(tr.GetObject(aid, OpenMode.ForRead) as Entity, xf, layer, $"{source}block:{name}/", opt, visit, stats))
+                        if (!VisitOne(tr.GetObject(aid, OpenMode.ForRead) as Entity, xf, layer, $"{source}block:{name}/", handle, opt, visit, stats))
                             return false;
                 }
                 continue;
             }
-            if (!VisitOne(ent, xf, layer, source, opt, visit, stats)) return false;
+            if (!VisitOne(ent, xf, layer, source, handle, opt, visit, stats)) return false;
         }
         return true;
     }
 
-    private static bool VisitOne(Entity? ent, Matrix3d xf, string layer, string source, Options opt, Func<Item, bool> visit, Stats stats)
+    private static bool VisitOne(Entity? ent, Matrix3d xf, string layer, string source, string handle, Options opt, Func<Item, bool> visit, Stats stats)
     {
         if (ent == null || !ent.Visible) return true;
         if (opt.Types != null && !opt.Types.Contains(ent.GetRXClass().DxfName)) return true;
@@ -142,7 +144,7 @@ internal static class GeometryReader
             {
                 if (!TryExtents(e, Matrix3d.Identity, out Extents3d ex) || !Intersects(ex, reg)) return true;
             }
-            return visit(new Item { Entity = e, Owned = owned, Layer = layer, Source = source });
+            return visit(new Item { Entity = e, Owned = owned, Layer = layer, Source = source, Handle = handle });
         }
         finally { if (owned) e.Dispose(); }
     }
@@ -215,9 +217,18 @@ internal static class GeometryReader
         if (Json.StringArray(p, "types") is { Length: > 0 } types)
             opt.Types = new HashSet<string>(types.Select(t => t.Trim().ToUpperInvariant()));
 
+        string format = (Json.Str(p, "format") ?? "compact").Trim().ToLowerInvariant();
+        if (format is not ("compact" or "full")) throw new InvalidOperationException("'format' deve ser 'compact' ou 'full'.");
+        bool full = format == "full";
+
         var items = new List<object>();
         var byLayerType = new SortedDictionary<string, int>(StringComparer.Ordinal);
         var arcRadii = new List<double>();
+        // compact: layers e origens viram apelidos (L1, S1) com legenda, para não repetir nomes longos de XREF
+        var layerIds = new Dictionary<string, string>(StringComparer.Ordinal);
+        var sourceIds = new Dictionary<string, string>(StringComparer.Ordinal);
+        string Alias(Dictionary<string, string> d, string key, string prefix) =>
+            d.TryGetValue(key, out string? v) ? v : d[key] = prefix + (d.Count + 1);
         int total = 0;
         using Transaction tr = db.TransactionManager.StartOpenCloseTransaction();
         Stats stats = Walk(db, tr, opt, it =>
@@ -226,27 +237,102 @@ internal static class GeometryReader
             string type = it.Entity.GetRXClass().DxfName;
             byLayerType[$"{it.Layer} | {type}"] = byLayerType.GetValueOrDefault($"{it.Layer} | {type}") + 1;
             if (it.Entity is Arc a) arcRadii.Add(a.Radius);
-            if (items.Count < max) items.Add(Describe(it));
+            if (items.Count < max)
+            {
+                if (full) items.Add(Describe(it));
+                else
+                {
+                    string l = Alias(layerIds, it.Layer, "L");
+                    string s = it.Source.Length > 0 ? " " + Alias(sourceIds, it.Source.TrimEnd('/'), "S") : "";
+                    items.Add($"{it.Handle} {type} {l}{s} {Compact(it.Entity)}");
+                }
+            }
             return true;
         });
 
-        return new
+        bool truncated = total > items.Count || stats.Truncated;
+        var res = new Dictionary<string, object?>
         {
-            drawing_units_declared = db.Insunits.ToString(),
-            unit_guess = Units.GuessFromArcs(arcRadii) is { } g ? new { unit = g.Name, reason = g.Reason } : null,
-            region = opt.Region is { } r ? new { min = P2(r.MinPoint), max = P2(r.MaxPoint) } : null,
-            total_found = total,
-            returned = items.Count,
-            truncated = total > items.Count || stats.Truncated,
-            counts_by_layer_and_type = byLayerType,
-            expanded_blocks_and_xrefs = stats.Expanded,
-            unresolved_xrefs = stats.UnresolvedXrefs,
-            hidden_skipped = stats.Hidden,
-            note = "Coordenadas em WCS, já com a transformação de blocos/XREFs aplicada. 'layer' é a layer efetiva; " +
-                   "'source' diz de onde veio (xref:/block:). Nomes de layers e blocos podem não refletir o conteúdo: " +
-                   "confira pela geometria.",
-            items,
+            ["drawing_units_declared"] = db.Insunits.ToString(),
+            ["unit_guess"] = Units.GuessFromArcs(arcRadii) is { } g ? new { unit = g.Name, reason = g.Reason } : null,
+            ["region"] = opt.Region is { } r ? new { min = P2(r.MinPoint), max = P2(r.MaxPoint) } : null,
+            ["total_found"] = total,
+            ["returned"] = items.Count,
+            ["truncated"] = truncated,
+            ["counts_by_layer_and_type"] = byLayerType,
+            ["expanded_blocks_and_xrefs"] = stats.Expanded,
+            ["unresolved_xrefs"] = stats.UnresolvedXrefs,
+            ["hidden_skipped"] = stats.Hidden,
         };
+        if (full)
+        {
+            res["note"] = "Coordenadas em WCS, já com a transformação de blocos/XREFs aplicada. 'layer' é a layer efetiva; " +
+                          "'source' diz de onde veio (xref:/block:); 'handle' é o objeto do Model que o contém. " +
+                          "Nomes de layers e blocos podem não refletir o conteúdo: confira pela geometria.";
+        }
+        else
+        {
+            res["legend"] = "Cada item: <handle> <TIPO> <layer> [origem] <geometria>. Coordenadas em WCS (blocos/XREFs já " +
+                            "transformados). handle = objeto do Model que contém o item (num XREF/bloco, é a inserção). " +
+                            "x,y>x,y = linha; pts= vértices (polilinha; 'arc' = tem trechos curvos); c= centro; r= raio; " +
+                            "a= ângulos em graus; box= retângulo envolvente; L= comprimento; A= área; h= altura do texto. " +
+                            "Nomes de layers e blocos podem enganar: confira pela geometria. format='full' dá JSON detalhado.";
+            res["layers"] = layerIds.ToDictionary(kv => kv.Value, kv => kv.Key);
+            if (sourceIds.Count > 0) res["sources"] = sourceIds.ToDictionary(kv => kv.Value, kv => kv.Key);
+        }
+        if (truncated) res["hint"] = "Há mais itens que os devolvidos: filtre por region/types/layers ou aumente max_items.";
+        res["items"] = items;
+        return res;
+    }
+
+    private static string F(double v) => R(v).ToString("0.####", System.Globalization.CultureInfo.InvariantCulture);
+    private static string Pt(Point3d q) => $"{F(q.X)},{F(q.Y)}";
+
+    /// <summary>Geometria em uma linha (formato compacto: ~4x menos tokens que o JSON detalhado).</summary>
+    private static string Compact(Entity e)
+    {
+        string Box() => TryExtents(e, Matrix3d.Identity, out Extents3d ex) ? $"box={Pt(ex.MinPoint)}..{Pt(ex.MaxPoint)}" : "";
+        static string Q(string s) => "\"" + s.Replace("\r", "").Replace("\n", "\\n").Replace("\"", "'") + "\"";
+        switch (e)
+        {
+            case Line l:
+                return $"{Pt(l.StartPoint)}>{Pt(l.EndPoint)} L={F(l.Length)}";
+            case Polyline pl:
+            {
+                var sb = new System.Text.StringBuilder(pl.Closed ? "closed" : "open");
+                bool arcs = false;
+                for (int i = 0; i < pl.NumberOfVertices; i++) if (Math.Abs(pl.GetBulgeAt(i)) > 1e-9) { arcs = true; break; }
+                if (arcs) sb.Append(" arc");
+                sb.Append($" L={F(pl.Length)}");
+                if (pl.Closed) { try { sb.Append($" A={F(pl.Area)}"); } catch { } }
+                sb.Append(" pts=");
+                int n = Math.Min(pl.NumberOfVertices, 300);
+                for (int i = 0; i < n; i++) { if (i > 0) sb.Append(' '); sb.Append(Pt(pl.GetPoint3dAt(i))); }
+                if (pl.NumberOfVertices > 300) sb.Append($" …(+{pl.NumberOfVertices - 300})");
+                return sb.ToString();
+            }
+            case Arc a:
+                return $"c={Pt(a.Center)} r={F(a.Radius)} a={F(a.StartAngle * 180 / Math.PI)}..{F(a.EndAngle * 180 / Math.PI)} ends={Pt(a.StartPoint)} {Pt(a.EndPoint)}";
+            case Circle c:
+                return $"c={Pt(c.Center)} r={F(c.Radius)}";
+            case DBText t:
+                return $"{Q(t.TextString)} at={Pt(t.Position)} h={F(t.Height)}" + (Math.Abs(t.Rotation) > 1e-9 ? $" rot={F(t.Rotation * 180 / Math.PI)}" : "");
+            case MText mt:
+                return $"{Q(mt.Text)} at={Pt(mt.Location)} h={F(mt.TextHeight)}";
+            case Dimension dim:
+                return $"={F(dim.Measurement)}" + (string.IsNullOrEmpty(dim.DimensionText) ? "" : $" text={Q(dim.DimensionText)}") + $" {Box()}";
+            case Hatch h:
+            {
+                string area = "";
+                try { area = $" A={F(h.Area)}"; } catch { }
+                return $"{h.PatternName}{area} {Box()}";
+            }
+            case BlockReference br:   // só aparece com include_blocks=false
+                return $"block={Q(br.Name)} at={Pt(br.Position)}" + (Math.Abs(br.Rotation) > 1e-9 ? $" rot={F(br.Rotation * 180 / Math.PI)}" : "") +
+                       (Math.Abs(br.ScaleFactors.X - 1) > 1e-9 ? $" scale={F(br.ScaleFactors.X)}" : "") + $" {Box()}";
+            default:
+                return Box();
+        }
     }
 
     private static object Describe(Item it)
@@ -256,6 +342,7 @@ internal static class GeometryReader
         {
             ["type"] = e.GetRXClass().DxfName,
             ["layer"] = it.Layer,
+            ["handle"] = it.Handle,
         };
         if (it.Source.Length > 0) d["source"] = it.Source.TrimEnd('/');
         switch (e)
