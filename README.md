@@ -141,7 +141,7 @@ Implementação **à mão, sem SDK**, sobre o transporte stdio:
 | `initialize` | ecoa a `protocolVersion` pedida; `capabilities.tools`; `serverInfo`; `instructions`: regras de uso para o modelo (consultar antes de alterar, avisar o que mudou, 1 chamada = 1 undo, o que fazer numa recusa) |
 | `notifications/initialized` | notificação, sem resposta |
 | `ping` | `{}` |
-| `tools/list` | 18 ferramentas com `inputSchema` (JSON Schema, `additionalProperties: false`) e `annotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) |
+| `tools/list` | 19 ferramentas com `inputSchema` (JSON Schema, `additionalProperties: false`) e `annotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) |
 | `tools/call` | `content` com `text` (JSON indentado) ou `image` (PNG base64) |
 
 Regras do protocolo seguidas no código:
@@ -212,6 +212,7 @@ Autodesk App Store. O AutoCAD lê o `PackageContents.xml` na abertura (`SeriesMi
 | `update_layer` | **altera** | só o que for informado; devolve **de → para**; pedido sem mudança não grava undo |
 | `move_selection_to_layer` | **altera** | move a seleção; pula layers travadas e avisa |
 | `read_geometry` | leitura | geometria em coordenadas reais, **entrando em blocos e XREFs**: linhas, polilinhas, arcos, textos, cotas, hachuras, com o handle de cada objeto; saída compacta (uma linha por objeto); filtros por região, seleção, layers e tipos; palpite de unidade |
+| `analyze_plan` | leitura | **mapa da planta numa chamada**: ambientes (nome e área pelos textos, contorno pela geometria), paredes de cada ambiente com espessura e aberturas, janelas numeradas e portas (largura, ambientes ligados, lado para onde abrem). Fica guardado e é refeito sozinho se a planta mudar; depois `hatch_regions`, `zoom_to`, `read_geometry` e `generate_elevation` aceitam o **nome** do ambiente (`room`/`rooms`) e da parede (`wall`: `W2`, `janela`, `em cima`) no lugar de coordenadas |
 | `draw_entities` | **altera** (acrescenta) | lote de linha, polilinha, retângulo, círculo, arco, texto, mtexto, cota, hachura e bloco (com atributos) num único undo; valida tudo antes |
 | `generate_elevation` | **altera** (acrescenta); `dry_run` só lê | vista de uma parede a partir da planta: vãos pela geometria (arco de porta, linhas de janela), pé-direito do rótulo "P.D.", paredes laterais em corte, forro, rodapé, acabamentos com chamada, cotas e título |
 | `hatch_regions` | **altera** (acrescenta); `dry_run` só lê | hachura áreas fechadas com contorno calculado pela geometria (entra em blocos/XREFs, inclusive espelhados): **todas as paredes** de uma região (rejeita contornos que vazaram por parede aberta e as faixas de janelas/portas em blocos) ou um ponto dentro de cada área (portas de giro contam como fechadas; a área é conferida com o texto "A=" do ambiente) |

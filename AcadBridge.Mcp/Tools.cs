@@ -17,6 +17,7 @@ internal static class Tools
         "read_geometry", "draw_entities", "generate_elevation",   // v0.4
         "edit_entities", "select_entities", "zoom_to",             // v0.5
         "hatch_regions",                                           // v0.5.1
+        "analyze_plan",                                            // v0.6
     };
 
     public static JsonArray Definitions() => new()
@@ -134,6 +135,7 @@ internal static class Tools
                      ["properties"] = new JsonObject { ["min"] = Point2(), ["max"] = Point2() },
                      ["required"] = new JsonArray("min", "max"),
                  },
+                 ["room"] = RoomProp("Alternativa à região: ler só este ambiente (id ou nome do analyze_plan)."),
                  ["use_selection"] = new JsonObject { ["type"] = "boolean", ["description"] = "Ler só os objetos selecionados no AutoCAD." },
                  ["layers"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Filtro de layers com curingas (* ?), ex.: ['CE- Alvenaria', '*Esquadria*']." },
                  ["types"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Tipos DXF, ex.: ['LINE','LWPOLYLINE','ARC','MTEXT']." },
@@ -177,6 +179,8 @@ internal static class Tools
              new JsonObject
              {
                  ["use_selection"] = new JsonObject { ["type"] = "boolean", ["description"] = "Usar a LINHA selecionada no AutoCAD como linha da parede." },
+                 ["room"] = RoomProp("Alternativa à linha: o ambiente (id ou nome do analyze_plan). Use junto com 'wall'."),
+                 ["wall"] = new JsonObject { ["type"] = "string", ["description"] = "Com 'room': a parede pelo id do analyze_plan ('W2'), pelo lado ('em cima', 'esquerda'...) ou pela abertura ('janela', 'porta'). A linha e o lado do observador saem do mapa." },
                  ["wall_line"] = new JsonObject
                  {
                      ["type"] = "object",
@@ -261,6 +265,7 @@ internal static class Tools
                      ["required"] = new JsonArray("min", "max"),
                  },
                  ["use_selection"] = new JsonObject { ["type"] = "boolean", ["description"] = "Usar a extensão dos objetos selecionados pelo usuário como região." },
+                 ["rooms"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Alternativa a 'points': ambientes por id ou nome do analyze_plan (ex.: ['BWC','R3']). Vira o modo points." },
                  ["layers"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Modo walls: só linhas destas layers (curingas * ?), se as paredes tiverem layer própria." },
                  ["min_thickness"] = new JsonObject { ["type"] = "number", ["description"] = "Modo walls: espessura mínima de parede em metros (padrão 0.07)." },
                  ["max_thickness"] = new JsonObject { ["type"] = "number", ["description"] = "Modo walls: espessura máxima em metros (padrão 0.40)." },
@@ -299,8 +304,35 @@ internal static class Tools
                  },
                  ["handles"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Alternativa à região: enquadrar estes objetos." },
                  ["margin"] = new JsonObject { ["type"] = "number", ["description"] = "Folga em fração do tamanho (padrão 0.1)." },
+                 ["room"] = RoomProp("Alternativa: enquadrar este ambiente (id ou nome do analyze_plan)."),
              }),
+
+        // ---------------- v0.6: mapa da planta ----------------
+        Tool("analyze_plan",
+             "Lê a planta UMA VEZ e devolve um MAPA curto: ambientes (id R1.., nome e área pelos textos, área calculada), " +
+             "paredes de cada ambiente (id W1.., lado, comprimento, espessura, janelas/portas/vãos com posição), portas " +
+             "(largura, quais ambientes liga, para onde abre). Entra em blocos/XREFs; ignora o que a IA desenhou (layers IA-*). " +
+             "USE ANTES de trabalhar numa planta: depois as ferramentas aceitam nomes no lugar de coordenadas — " +
+             "hatch_regions {rooms}, zoom_to {room}, read_geometry {room}, generate_elevation {room, wall}. Muito mais " +
+             "rápido e barato que ler linhas com read_geometry. O mapa fica guardado e é refeito sozinho se a planta mudar. " +
+             "Não altera o desenho.",
+             new JsonObject
+             {
+                 ["region"] = new JsonObject
+                 {
+                     ["type"] = "object",
+                     ["description"] = "Região que cobre a planta inteira (um pavimento ou apartamento) {min:[x,y], max:[x,y]}. Ambientes cortados pela borda ficam de fora.",
+                     ["properties"] = new JsonObject { ["min"] = Point2(), ["max"] = Point2() },
+                     ["required"] = new JsonArray("min", "max"),
+                 },
+                 ["use_selection"] = new JsonObject { ["type"] = "boolean", ["description"] = "Usar a extensão do que o usuário selecionou (ex.: o bloco do pavimento) como região." },
+                 ["units"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("m", "cm", "mm"), ["description"] = "Unidade do desenho, se a dedução falhar." },
+                 ["walls"] = new JsonObject { ["type"] = "boolean", ["description"] = "Analisar paredes e aberturas de cada ambiente (padrão true; false = só ambientes e portas, mais rápido)." },
+                 ["layers"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Só estas layers (curingas * ?), se a planta tiver layers confiáveis." },
+             }, Kind.ReadOnly),
     };
+
+    private static JsonObject RoomProp(string description) => new() { ["type"] = "string", ["description"] = description };
 
     private static JsonObject Point2(string? description = null)
     {

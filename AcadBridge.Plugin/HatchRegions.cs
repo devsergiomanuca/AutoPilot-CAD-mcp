@@ -272,21 +272,31 @@ internal static class HatchRegions
     }
 
     /// <summary>Segmentos 2D da região (arcos e círculos viram cordas). 'straight' = só os retos (para achar paredes).</summary>
-    private sealed class Extra
+    internal sealed class Extra
     {
         public double DoorMin, DoorMax;
         public int Doors;
+        public bool SkipIa;      // ignorar layers IA-* (o que a própria IA desenhou: móveis, cotas, vistas)
+        public bool AllTexts;    // guardar todos os textos (nomes de ambientes), não só os de área
         public readonly List<(Point2d Pos, double M2, string Text)> AreaTexts = new();
+        public readonly List<(Point2d Center, string Text)> Texts = new();
+        public readonly List<(Point2d Center, Point2d A, Point2d B, double R)> DoorArcs = new();
     }
 
     /// <summary>"A= 4,80 m²", "ÁREA: 12.5m2" → 4.80 / 12.5 (m²).</summary>
-    private static double? AreaValue(string s)
+    /// <summary>Centro do texto (o ponto de inserção de um MTEXT fica no canto e pode cair sobre a parede).</summary>
+    private static Point2d? TextCenter(Entity e) =>
+        GeometryReader.TryExtents(e, Matrix3d.Identity, out Extents3d x)
+            ? new Point2d((x.MinPoint.X + x.MaxPoint.X) / 2, (x.MinPoint.Y + x.MaxPoint.Y) / 2)
+            : null;
+
+    internal static double? AreaValue(string s)
     {
         var m = System.Text.RegularExpressions.Regex.Match(s, @"(?:\bA|ÁREA|AREA)\s*[=:]\s*([0-9]+(?:[.,][0-9]+)?)\s*m", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
         return m.Success && double.TryParse(m.Groups[1].Value.Replace(',', '.'), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double v) && v > 0 ? v : null;
     }
 
-    private static (List<(Point2d A, Point2d B)> All, List<(Point2d A, Point2d B)> Straight, List<double> Radii, List<int> Tags, List<string> Sources) Collect(Database db, JsonElement p, Extents3d? region, Extra? extra = null)
+    internal static (List<(Point2d A, Point2d B)> All, List<(Point2d A, Point2d B)> Straight, List<double> Radii, List<int> Tags, List<string> Sources) Collect(Database db, JsonElement p, Extents3d? region, Extra? extra = null)
     {
         var all = new List<(Point2d, Point2d)>();
         var tags = new List<int>();
@@ -316,6 +326,11 @@ internal static class HatchRegions
             var rx = pats.Select(GeometryReader.WildcardToRegex).ToArray();
             opt.LayerFilter = l => rx.Any(x => x.IsMatch(l) || x.IsMatch(l.Contains('|') ? l[(l.IndexOf('|') + 1)..] : l));
         }
+        if (extra?.SkipIa == true)
+        {
+            Func<string, bool>? prev = opt.LayerFilter;
+            opt.LayerFilter = l => !l.StartsWith("IA-", StringComparison.OrdinalIgnoreCase) && (prev == null || prev(l));
+        }
         GeometryReader.Walk(db, tr, opt, it =>
         {
             curTag = sources.IndexOf(it.Source);
@@ -343,6 +358,7 @@ internal static class HatchRegions
                         AddSeg((P(a.Center), P(a.StartPoint)));
                         AddSeg((P(a.Center), P(a.EndPoint)));
                         extra.Doors++;
+                        extra.DoorArcs.Add((P(a.Center), P(a.StartPoint), P(a.EndPoint), a.Radius));
                         break;
                     }
                     if (a.Normal.Z >= 0) Chords(a.Center, a.Radius, s0, s1); else Chords(a.Center, a.Radius, s1, s0);
@@ -350,9 +366,11 @@ internal static class HatchRegions
                 }
                 case DBText t when extra != null:
                     if (AreaValue(t.TextString) is { } v1) extra.AreaTexts.Add((P(t.Position), v1, t.TextString.Trim()));
+                    if (extra.AllTexts && TextCenter(t) is { } tc1) extra.Texts.Add((tc1, t.TextString.Trim()));
                     break;
                 case MText m when extra != null:
                     if (AreaValue(m.Text) is { } v2) extra.AreaTexts.Add((P(m.Location), v2, m.Text.Replace("\r", " ").Replace("\n", " ").Trim()));
+                    if (extra.AllTexts && TextCenter(m) is { } tc2) extra.Texts.Add((tc2, m.Text.Trim()));
                     break;
                 case Circle c:
                     Chords(c.Center, c.Radius, 0, 2 * Math.PI);

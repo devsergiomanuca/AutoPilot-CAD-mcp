@@ -107,7 +107,10 @@ internal static class Program
                 "nessa aba; toda resposta começa com 'Desenho: ...'. Se o usuário trocar de aba, as chamadas são " +
                 "recusadas (nada é lido nem alterado): pergunte se ele quer trabalhar no outro desenho e, se sim, use " +
                 "set_target_document; se não, peça para ele voltar à aba anterior. " +
-                "GEOMETRIA: para entender a planta (paredes, vãos, textos), use read_geometry — ela entra em XREFs e blocos. " +
+                "PLANTA: antes de trabalhar numa planta, chame analyze_plan com a região dela (ou a seleção do usuário): ele " +
+                "devolve ambientes (R1..), paredes (W1..) com janelas/portas e as portas entre ambientes. Depois use os nomes " +
+                "no lugar de coordenadas (hatch_regions rooms, zoom_to room, read_geometry room, generate_elevation room+wall). " +
+                "GEOMETRIA: para detalhes que o mapa não traz (paredes, vãos, textos), use read_geometry — ela entra em XREFs e blocos. " +
                 "Não confie em nomes de layers/blocos; confira pela geometria. Unidades: o arquivo pode declarar mm e estar " +
                 "em metros ou cm; use o palpite de unidade e as medidas. " +
                 "VISTAS: para a vista de uma parede, peça ao usuário para desenhar uma linha sobre a face da parede (da esquerda " +

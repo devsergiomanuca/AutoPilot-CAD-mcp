@@ -92,6 +92,25 @@ internal static class Elevation
         return Report(a, drawn: null, origin: null);
     }
 
+    internal sealed record ProbeOpening(string Kind, double FromM, double ToM, string Evidence);
+    internal sealed record Probe(Point3d Start, Point3d End, double ThicknessM, double Coverage, List<ProbeOpening> Openings);
+
+    /// <summary>
+    /// Mesma análise da vista, só para LER uma parede (usada pelo analyze_plan): espessura e aberturas
+    /// (porta/janela/vão) ao longo da linha, já orientada pelo observador (de dentro do ambiente).
+    /// </summary>
+    internal static Probe ProbeWall(Document doc, Point2d start, Point2d end, Point2d viewer, string unit)
+    {
+        string F(double v) => v.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+        string json = $"{{\"wall_line\":{{\"start\":[{F(start.X)},{F(start.Y)}],\"end\":[{F(end.X)},{F(end.Y)}]}}," +
+                      $"\"viewer_point\":[{F(viewer.X)},{F(viewer.Y)}],\"units\":\"{unit}\",\"height\":2.8}}";
+        using JsonDocument jd = JsonDocument.Parse(json);
+        Analysis a = Analyze(doc, jd.RootElement);
+        double uf = a.Unit.PerMeter;
+        return new Probe(a.Start, a.End, a.Thickness / uf, a.Coverage,
+                         a.Openings.Select(o => new ProbeOpening(o.Kind, o.From / uf, o.To / uf, o.Evidence)).ToList());
+    }
+
     public static object Generate(Document doc, JsonElement p)
     {
         Analysis a = Analyze(doc, p);

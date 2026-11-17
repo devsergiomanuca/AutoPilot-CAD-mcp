@@ -199,6 +199,9 @@ internal sealed class BridgeServer : IDisposable
         if (!string.IsNullOrEmpty(busy))
             throw new InvalidOperationException($"AutoCAD ocupado com o comando '{busy}'. Termine/cancele (Esc) e tente de novo.");
 
+        // v0.6: nomes de ambientes/paredes (do analyze_plan) viram coordenadas antes de qualquer validação
+        if (PlanAnalysis.NeedsExpand(method, p)) using (doc.LockDocument()) p = PlanAnalysis.Expand(doc, method, p);
+
         if (DrawingEdits.Methods.Contains(method))
         {
             // Variante só de leitura (ex.: generate_elevation com dry_run): sem undo e liberada no modo somente leitura.
@@ -232,6 +235,7 @@ internal sealed class BridgeServer : IDisposable
             "read_geometry" => GeometryReader.Read(doc, p),
             "select_entities" => ViewOps.Select(doc, p),   // v0.5: não altera o desenho
             "zoom_to" => ViewOps.Zoom(doc, p),
+            "analyze_plan" => PlanAnalysis.Run(doc, p),    // v0.6: mapa da planta (não altera o desenho)
             _ => throw new InvalidOperationException($"Método desconhecido: '{method}'."),
         };
         return new Executed(result, where);
