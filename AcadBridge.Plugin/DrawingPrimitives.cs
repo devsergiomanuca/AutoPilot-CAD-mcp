@@ -111,7 +111,12 @@ internal sealed class Canvas
         Dimension d = rotation is { } r
             ? new RotatedDimension(r, p1, p2, dimLine, text ?? "", _db.Dimstyle)
             : new AlignedDimension(p1, p2, dimLine, text ?? "", _db.Dimstyle);
-        return Add(d, layer);
+        // O estilo sozinho ignora os ajustes atuais do usuário (ex.: DIMSCALE 50 digitado na linha de comando
+        // vira "override" do estilo, não muda o estilo). GetDimstyleData traz estilo + overrides, como o DIM faz.
+        // Aplicado DEPOIS do Add: o SetDatabaseDefaults dentro do Add reatribui o estilo.
+        Add(d, layer);
+        using (DimStyleTableRecord current = _db.GetDimstyleData()) d.SetDimstyleData(current);
+        return d;
     }
 
     /// <summary>Hachura com contorno externo e, opcionalmente, furos (ex.: portas e janelas dentro de uma pintura).</summary>
